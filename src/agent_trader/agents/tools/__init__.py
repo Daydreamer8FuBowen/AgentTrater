@@ -1,0 +1,1 @@
+"""Tool contracts for agents."""

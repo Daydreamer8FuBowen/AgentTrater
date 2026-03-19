@@ -1,0 +1,45 @@
+version: "3.9"
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: agent-trader-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: password
+      MYSQL_DATABASE: agent_trader
+    ports:
+      - "3306:3306"
+    command: ["mysqld", "--default-authentication-plugin=mysql_native_password"]
+    volumes:
+      - mysql_data:/var/lib/mysql
+
+  mongo:
+    image: mongo:7.0
+    container_name: agent-trader-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+
+  influxdb:
+    image: influxdb:2.7
+    container_name: agent-trader-influxdb
+    restart: unless-stopped
+    ports:
+      - "8086:8086"
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: password123
+      DOCKER_INFLUXDB_INIT_ORG: agent-trader
+      DOCKER_INFLUXDB_INIT_BUCKET: market-data
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: change-me
+    volumes:
+      - influx_data:/var/lib/influxdb2
+
+volumes:
+  mysql_data:
+  mongo_data:
+  influx_data:
