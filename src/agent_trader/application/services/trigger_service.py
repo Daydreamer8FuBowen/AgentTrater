@@ -31,7 +31,6 @@ class TriggerService:
         async with self._unit_of_work as uow:
             await uow.opportunities.add(opportunity)
             await uow.research_tasks.add(research_task)
-            await uow.commit()
 
         # graph 状态只携带后续推理真正需要的上下文，避免把 API 层对象直接泄漏到 Agent 内部。
         state = {

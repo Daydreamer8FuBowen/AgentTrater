@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import Depends
@@ -9,6 +10,7 @@ from agent_trader.application.services.trigger_service import TriggerService
 from agent_trader.core.config import Settings, get_settings
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 from agent_trader.storage.base import CandleRepository, CandidateRepository, MemoryRepository, OpportunityRepository, ResearchTaskRepository, SignalRepository, UnitOfWork
+from agent_trader.storage.mysql import MySQLUnitOfWork, MySQLConnectionManager
 
 
 class InMemoryOpportunityRepository:
@@ -66,30 +68,18 @@ class InMemoryCandleRepository:
         self.items.extend(candles)
 
 
-class InMemoryUnitOfWork:
-    def __init__(self) -> None:
-        self.opportunities: OpportunityRepository = InMemoryOpportunityRepository()
-        self.research_tasks: ResearchTaskRepository = InMemoryResearchTaskRepository()
-        self.candidates: CandidateRepository = InMemoryCandidateRepository()
-        self.memories: MemoryRepository = InMemoryMemoryRepository()
-        self.signals: SignalRepository = InMemorySignalRepository()
-        self.candles: CandleRepository = InMemoryCandleRepository()
 
-    async def __aenter__(self) -> UnitOfWork:
-        return self
-
-    async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
-        return None
-
-    async def commit(self) -> None:
-        return None
-
-    async def rollback(self) -> None:
-        return None
+# MySQL事务实现：
+async def get_uow(settings: Settings = Depends(get_settings)) -> AsyncIterator[UnitOfWork]:
+    """
+    获取 MySQLUnitOfWork，注入真实数据库事务。
+    """
+    mysql_manager = MySQLConnectionManager(settings.mysql)
+    async with mysql_manager.session() as session:
+        yield MySQLUnitOfWork(session)
 
 
-def get_uow() -> UnitOfWork:
-    return InMemoryUnitOfWork()
+
 
 
 def get_tushare_source(settings: Settings = Depends(get_settings)) -> TuShareSource:
