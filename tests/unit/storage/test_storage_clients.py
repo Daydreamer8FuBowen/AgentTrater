@@ -1,26 +1,26 @@
 from unittest.mock import MagicMock
 
-from sqlalchemy.ext.asyncio import AsyncEngine
+from motor.motor_asyncio import AsyncIOMotorClient
 
-from agent_trader.core.config import InfluxConfig, MySQLConfig
+from agent_trader.core.config import InfluxConfig, MongoConfig
 from agent_trader.storage.influx.client import InfluxConnectionManager
-from agent_trader.storage.mysql.client import MySQLConnectionManager
+from agent_trader.storage.mongo.client import MongoConnectionManager
 
 
-def test_mysql_connection_manager_lazily_creates_engine() -> None:
-    config = MySQLConfig(
-        dsn="mysql+asyncmy://root:root@localhost:3306/agent_trader",
-        echo=False,
-        pool_size=10,
-        max_overflow=20,
+def test_mongo_connection_manager_lazily_creates_client_and_database() -> None:
+    config = MongoConfig(
+        dsn="mongodb://localhost:27017",
+        database="agent_trader",
+        app_name="agent-trader-tests",
     )
 
-    manager = MySQLConnectionManager(config)
+    manager = MongoConnectionManager(config)
 
-    engine = manager.engine
+    client = manager.client
+    database = manager.database
 
-    assert isinstance(engine, AsyncEngine)
-    assert manager.session_factory is not None
+    assert isinstance(client, AsyncIOMotorClient)
+    assert database.name == "agent_trader"
 
 
 def test_influx_connection_manager_uses_bucket_and_org() -> None:

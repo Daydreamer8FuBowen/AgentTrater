@@ -17,17 +17,6 @@ class SystemConfig(BaseModel):
     debug: bool
 
 
-class MySQLConfig(BaseModel):
-    """MySQL 连接与连接池配置。"""
-
-    model_config = ConfigDict(frozen=True)
-
-    dsn: str
-    echo: bool
-    pool_size: int
-    max_overflow: int
-
-
 class MongoConfig(BaseModel):
     """MongoDB 连接配置。"""
 
@@ -84,7 +73,7 @@ class Settings(BaseSettings):
     """统一配置入口。
 
     这里保留扁平环境变量定义，方便 `.env` 和部署平台直接注入；
-    对内则通过分组属性暴露 system/mysql/mongo/influx/worker/agent 等子配置。
+    对内则通过分组属性暴露 system/mongo/influx/worker/agent 等子配置。
     """
 
     app_name: str = Field(default="AgentTrader", alias="APP_NAME")
@@ -93,15 +82,6 @@ class Settings(BaseSettings):
     app_port: int = Field(default=8000, alias="APP_PORT")
     log_level: str = Field(default="INFO", alias="LOG_LEVEL")
     app_debug: bool = Field(default=True, alias="APP_DEBUG")
-
-    # 这里提供本地默认值，保证项目在未接入真实基础设施时也能冷启动和跑测试。
-    mysql_dsn: str = Field(
-        default="mysql+asyncmy://root:password@localhost:3306/agent_trader",
-        alias="MYSQL_DSN",
-    )
-    mysql_echo: bool = Field(default=False, alias="MYSQL_ECHO")
-    mysql_pool_size: int = Field(default=10, alias="MYSQL_POOL_SIZE")
-    mysql_max_overflow: int = Field(default=20, alias="MYSQL_MAX_OVERFLOW")
 
     mongo_dsn: str = Field(default="mongodb://localhost:27017", alias="MONGO_DSN")
     mongo_database: str = Field(default="agent_trader", alias="MONGO_DATABASE")
@@ -131,10 +111,11 @@ class Settings(BaseSettings):
     tushare_token: str = Field(default="", alias="TUSHARE_TOKEN")
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env.local", ".env"),
         env_file_encoding="utf-8",
         case_sensitive=True,
         populate_by_name=True,
+        extra="ignore",
     )
 
     @property
@@ -146,15 +127,6 @@ class Settings(BaseSettings):
             port=self.app_port,
             log_level=self.log_level,
             debug=self.app_debug,
-        )
-
-    @property
-    def mysql(self) -> MySQLConfig:
-        return MySQLConfig(
-            dsn=self.mysql_dsn,
-            echo=self.mysql_echo,
-            pool_size=self.mysql_pool_size,
-            max_overflow=self.mysql_max_overflow,
         )
 
     @property

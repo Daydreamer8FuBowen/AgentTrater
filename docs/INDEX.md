@@ -20,6 +20,7 @@
 |------|--------|-------------|
 | [Ingestion 架构深度解析](INGESTION_ARCHITECTURE_CN.md) | 三层转换模式、数据源扩展、设计模式对比 | 添加新数据源的任何操作 |
 | [DEVELOPER_GUIDE_CN.md](DEVELOPER_GUIDE_CN.md) 第 3 节 | 现有数据源分析、完整的添加新源示例 | 理解数据流、实现扩展 |
+| [Demo Agent 开发指南](DEMO_AGENT_DEVELOPMENT_CN.md) | LangGraph Demo 节点编排、状态设计、扩展方式 | 快速落地第一个可运行 Agent |
 
 ### 🔧 实现参考
 

@@ -40,9 +40,17 @@
    - Java 开发者对比表
    - 常见问题 FAQ
 
+### Agent 开发文档（1 份）
+
+6. **[Demo Agent 开发指南](DEMO_AGENT_DEVELOPMENT_CN.md)**
+   - LangGraph Demo 编排（analyst -> reviewer -> synthesizer）
+   - GraphState 状态约定
+   - 节点扩展与失败处理建议
+   - 验证与验收标准
+
 ### 可运行演示脚本（1 份）
 
-6. **[scripts/demo_events.py](../scripts/demo_events.py)**
+7. **[scripts/demo_events.py](../scripts/demo_events.py)**
    ```bash
    uv run python -m scripts.demo_events
    ```

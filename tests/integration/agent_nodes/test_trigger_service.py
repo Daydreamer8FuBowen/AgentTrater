@@ -11,8 +11,9 @@ from agent_trader.ingestion.models import ResearchTrigger
 
 class DummyUnitOfWork:
     def __init__(self) -> None:
-        self.opportunities = AsyncMock()
-        self.research_tasks = AsyncMock()
+        self.task_runs = AsyncMock()
+        self.task_events = AsyncMock()
+        self.task_artifacts = AsyncMock()
         self.commit = AsyncMock()
         self.rollback = AsyncMock()
 
@@ -43,9 +44,10 @@ async def test_submit_trigger_persists_entities_once_and_invokes_graph() -> None
 
     assert result["status"] == "queued"
     assert result["job_id"]
-    uow.opportunities.add.assert_awaited_once()
-    uow.research_tasks.add.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    uow.task_runs.add.assert_awaited_once()
+    assert uow.task_events.add.await_count == 4
+    uow.task_artifacts.add.assert_awaited_once()
+    assert uow.commit.await_count == 2
     uow.rollback.assert_not_awaited()
     router_graph.invoke.assert_awaited_once()
 
@@ -67,7 +69,8 @@ async def test_submit_trigger_rolls_back_on_router_failure_after_persist_commit_
     with pytest.raises(RuntimeError, match="graph failed"):
         await service.submit_trigger(trigger)
 
-    uow.opportunities.add.assert_awaited_once()
-    uow.research_tasks.add.assert_awaited_once()
-    uow.commit.assert_awaited_once()
+    uow.task_runs.add.assert_awaited_once()
+    assert uow.task_events.add.await_count == 3
+    uow.task_artifacts.add.assert_not_awaited()
+    assert uow.commit.await_count == 2
     uow.rollback.assert_not_awaited()

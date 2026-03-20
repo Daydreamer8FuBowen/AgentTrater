@@ -1,21 +1,31 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Protocol
+from typing import Any, Protocol
 
-from agent_trader.domain.models import Candle, Candidate, MemoryRecord, Opportunity, ResearchTask, SignalSnapshot
-
-
-class OpportunityRepository(Protocol):
-    """结构化机会对象的持久化接口。"""
-
-    async def add(self, opportunity: Opportunity) -> Opportunity: ...
+from agent_trader.domain.models import Candle, Candidate, MemoryRecord, SignalSnapshot
 
 
-class ResearchTaskRepository(Protocol):
-    """研究任务仓储接口。"""
+class TaskRunRepository(Protocol):
+    """任务运行摘要仓储接口。"""
 
-    async def add(self, task: ResearchTask) -> ResearchTask: ...
+    async def add(self, task_run: Any) -> Any: ...
+    async def get(self, run_id: str) -> Any | None: ...
+    async def mark_running(self, run_id: str) -> None: ...
+    async def mark_completed(self, run_id: str, *, result_summary: str | None) -> None: ...
+    async def mark_failed(self, run_id: str, *, error_message: str) -> None: ...
+
+
+class TaskEventRepository(Protocol):
+    """任务执行事件仓储接口。"""
+
+    async def add(self, event: Any) -> Any: ...
+
+
+class TaskArtifactRepository(Protocol):
+    """任务执行产物仓储接口。"""
+
+    async def add(self, artifact: Any) -> Any: ...
 
 
 class CandidateRepository(Protocol):
@@ -47,8 +57,9 @@ class CandleRepository(Protocol):
 class UnitOfWork(Protocol):
     """把一次业务操作涉及的多仓储写入收敛到同一个事务边界。"""
 
-    opportunities: OpportunityRepository
-    research_tasks: ResearchTaskRepository
+    task_runs: TaskRunRepository
+    task_events: TaskEventRepository
+    task_artifacts: TaskArtifactRepository
     candidates: CandidateRepository
     memories: MemoryRepository
     signals: SignalRepository
