@@ -1,3 +1,9 @@
+"""文档注册与索引定义。
+
+该模块通过 `DocumentConfig` 将 Pydantic 文档模型与集合名称、主键、可搜索/可编辑/JSON 字段等元信息关联，
+并在 `DOCUMENT_REGISTRY` 中集中声明每个集合应创建的索引（用于 `MongoConnectionManager.ensure_indexes()`）。
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +16,7 @@ from agent_trader.storage.mongo.documents import (
     AgentReleaseDocument,
     AgentReleasePointerDocument,
     MongoDocument,
+    NewsDocument,
     SkillDefinitionDocument,
     SkillVersionDocument,
     TaskArtifactDocument,
@@ -21,6 +28,18 @@ from agent_trader.storage.mongo.documents import (
 
 @dataclass(frozen=True)
 class DocumentConfig:
+    """描述一个文档对应的元信息（用于注册和索引创建）。
+
+    字段：
+      - `name`: 集合名
+      - `model`: 对应的 Pydantic 模型类
+      - `primary_key`: 主键字段名
+      - `searchable_columns`: 建议用于搜索/过滤的字段路径
+      - `json_columns`: 需要序列化为 JSON 的字段
+      - `editable_columns`: 可通过 API 编辑的字段
+      - `indexes`: 此集合应创建的 IndexModel 列表
+    """
+
     name: str
     model: type[MongoDocument]
     primary_key: str
@@ -31,6 +50,7 @@ class DocumentConfig:
 
     @property
     def columns(self) -> tuple[str, ...]:
+        """返回模型声明的字段名元组（Pydantic 的 model_fields）。"""
         return tuple(self.model.model_fields.keys())
 
 
@@ -119,11 +139,27 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
                 IndexModel([("run_id", ASCENDING), ("node_id", ASCENDING), ("created_at", DESCENDING)]),
             ),
         ),
+        _document_config(
+            NewsDocument,
+            indexes=(
+                IndexModel([(NewsDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel([("dedupe_key", ASCENDING)], unique=True),
+                IndexModel([("source", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel([("market", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel([("stock_tags", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel([("concept_tags", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel([("credibility", DESCENDING), ("published_at", DESCENDING)]),
+            ),
+        ),
     )
 }
 
 
 def serialize_document(value: Any) -> Any:
+    """将 Pydantic/原生对象序列化为可以写入 JSON 的结构。
+
+    主要处理 datetime（调用 `isoformat()`）、list、dict 的递归序列化。
+    """
     if isinstance(value, list):
         return [serialize_document(item) for item in value]
     if isinstance(value, dict):

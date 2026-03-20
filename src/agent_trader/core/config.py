@@ -60,6 +60,26 @@ class AgentRuntimeConfig(BaseModel):
     checkpoint_enabled: bool
 
 
+class OpenAIConfig(BaseModel):
+    """OpenAI 模型接入配置。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    api_key: str
+    base_url: str | None
+    timeout_seconds: int
+    temperature: float
+
+
+class AgentModelConfig(BaseModel):
+    """Agent 名称到模型名称的映射配置。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    default_model: str
+    model_map: dict[str, str]
+
+
 class TuShareConfig(BaseModel):
     """TuShare 数据源配置。"""
 
@@ -107,6 +127,16 @@ class Settings(BaseSettings):
     agent_max_concurrency: int = Field(default=4, alias="AGENT_MAX_CONCURRENCY")
     agent_default_timeout_seconds: int = Field(default=120, alias="AGENT_DEFAULT_TIMEOUT_SECONDS")
     agent_checkpoint_enabled: bool = Field(default=True, alias="AGENT_CHECKPOINT_ENABLED")
+    agent_default_model: str = Field(default="gpt-4.1-mini", alias="AGENT_DEFAULT_MODEL")
+    agent_model_map: dict[str, str] = Field(
+        default_factory=lambda: {"news_preprocess": "gpt-4.1-mini"},
+        alias="AGENT_MODEL_MAP",
+    )
+
+    openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+    openai_base_url: str | None = Field(default=None, alias="OPENAI_BASE_URL")
+    openai_timeout_seconds: int = Field(default=60, alias="OPENAI_TIMEOUT_SECONDS")
+    openai_temperature: float = Field(default=0.1, alias="OPENAI_TEMPERATURE")
 
     tushare_token: str = Field(default="", alias="TUSHARE_TOKEN")
 
@@ -162,6 +192,22 @@ class Settings(BaseSettings):
             max_concurrency=self.agent_max_concurrency,
             default_timeout_seconds=self.agent_default_timeout_seconds,
             checkpoint_enabled=self.agent_checkpoint_enabled,
+        )
+
+    @property
+    def agent_models(self) -> AgentModelConfig:
+        return AgentModelConfig(
+            default_model=self.agent_default_model,
+            model_map=self.agent_model_map,
+        )
+
+    @property
+    def openai(self) -> OpenAIConfig:
+        return OpenAIConfig(
+            api_key=self.openai_api_key,
+            base_url=self.openai_base_url,
+            timeout_seconds=self.openai_timeout_seconds,
+            temperature=self.openai_temperature,
         )
 
     @property

@@ -9,3 +9,6 @@ def test_grouped_settings_are_available() -> None:
     assert settings.influx.bucket == settings.influx_bucket
     assert settings.worker.timezone
     assert settings.agent.max_concurrency > 0
+    assert settings.agent_models.default_model
+    assert "news_preprocess" in settings.agent_models.model_map
+    assert settings.openai.timeout_seconds > 0

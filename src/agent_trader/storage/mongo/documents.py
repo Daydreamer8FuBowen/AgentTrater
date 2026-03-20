@@ -1,3 +1,10 @@
+"""Pydantic 文档模型集合。
+
+本模块定义了与 Mongo 集合对应的 Pydantic 模型（文档结构）。
+每个模型声明了 `collection_name`、`primary_key`、以及 `json_fields` / `editable_fields` 等元信息，
+便于仓库层序列化/反序列化和索引管理。
+"""
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -8,21 +15,28 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 def _new_identifier(prefix: str) -> str:
+    """生成带前缀的唯一标识符，用作主键默认值（例如 `run_xxx`）。"""
     return f"{prefix}_{uuid4().hex}"
 
 
 class MongoDocument(BaseModel):
-    """Mongo 文档实体基类。"""
+    """Mongo 文档实体基类。
+
+    通过 `model_config` 禁止额外字段（`extra='forbid'`），保证写入时字段可控。
+    """
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
 class TimestampedDocument(MongoDocument):
+    """带 `created_at` / `updated_at` 时间戳的基类文档。"""
+
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
 
 class AgentDefinitionDocument(TimestampedDocument):
+    """Agent 定义文档（集合 `agent_definitions`）。"""
     collection_name: ClassVar[str] = "agent_definitions"
     primary_key: ClassVar[str] = "agent_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("agent_id", "name", "type", "description", "status")
@@ -61,6 +75,7 @@ class AgentDefinitionDocument(TimestampedDocument):
 
 
 class SkillDefinitionDocument(TimestampedDocument):
+    """Skill 定义文档（集合 `skill_definitions`）。"""
     collection_name: ClassVar[str] = "skill_definitions"
     primary_key: ClassVar[str] = "skill_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("skill_id", "name", "category", "description", "status")
@@ -85,6 +100,7 @@ class SkillDefinitionDocument(TimestampedDocument):
 
 
 class SkillVersionDocument(TimestampedDocument):
+    """Skill 版本文档（集合 `skill_versions`）。"""
     collection_name: ClassVar[str] = "skill_versions"
     primary_key: ClassVar[str] = "skill_version_id"
     searchable_fields: ClassVar[tuple[str, ...]] = (
@@ -133,6 +149,7 @@ class SkillVersionDocument(TimestampedDocument):
 
 
 class AgentReleaseDocument(TimestampedDocument):
+    """Agent 发布文档（集合 `agent_releases`）。"""
     collection_name: ClassVar[str] = "agent_releases"
     primary_key: ClassVar[str] = "agent_release_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("agent_release_id", "agent_id", "version", "status")
@@ -156,6 +173,7 @@ class AgentReleaseDocument(TimestampedDocument):
 
 
 class AgentReleasePointerDocument(TimestampedDocument):
+    """记录 Agent 当前/历史发布指针（集合 `agent_release_pointers`）。"""
     collection_name: ClassVar[str] = "agent_release_pointers"
     primary_key: ClassVar[str] = "agent_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("agent_id", "current_release_id", "previous_release_id")
@@ -174,6 +192,10 @@ class AgentReleasePointerDocument(TimestampedDocument):
 
 
 class TaskRunDocument(TimestampedDocument):
+    """任务运行状态文档（集合 `task_runs`）。
+
+    存储任务的执行上下文、状态、执行元数据与结果摘要。
+    """
     collection_name: ClassVar[str] = "task_runs"
     primary_key: ClassVar[str] = "run_id"
     searchable_fields: ClassVar[tuple[str, ...]] = (
@@ -203,6 +225,7 @@ class TaskRunDocument(TimestampedDocument):
 
 
 class TaskEventDocument(MongoDocument):
+    """任务执行事件（集合 `task_events`），适合用于事件流存储与回放。"""
     collection_name: ClassVar[str] = "task_events"
     primary_key: ClassVar[str] = "event_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("event_id", "run_id", "event_type", "node.node_id", "skill.skill_version_id")
@@ -222,6 +245,7 @@ class TaskEventDocument(MongoDocument):
 
 
 class TaskArtifactDocument(MongoDocument):
+    """任务产物（集合 `task_artifacts`），用于存储日志、二进制或 JSON 内容。"""
     collection_name: ClassVar[str] = "task_artifacts"
     primary_key: ClassVar[str] = "artifact_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("artifact_id", "run_id", "node_id", "artifact_type", "content_type")
@@ -239,6 +263,7 @@ class TaskArtifactDocument(MongoDocument):
 
 
 class TaskCheckpointDocument(MongoDocument):
+    """任务检查点（集合 `task_checkpoints`），用于保存节点级别的中间状态。"""
     collection_name: ClassVar[str] = "task_checkpoints"
     primary_key: ClassVar[str] = "checkpoint_id"
     searchable_fields: ClassVar[tuple[str, ...]] = ("checkpoint_id", "run_id", "node_id", "checkpoint_type")
@@ -252,3 +277,54 @@ class TaskCheckpointDocument(MongoDocument):
     checkpoint_type: str
     state: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class NewsDocument(TimestampedDocument):
+    """新闻文档（集合 `news_items`）。"""
+
+    collection_name: ClassVar[str] = "news_items"
+    primary_key: ClassVar[str] = "news_id"
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "news_id",
+        "source",
+        "title",
+        "summary",
+        "market",
+        "industry_tags",
+        "concept_tags",
+        "stock_tags",
+        "tags",
+        "dedupe_key",
+    )
+    json_fields: ClassVar[tuple[str, ...]] = (
+        "industry_tags",
+        "concept_tags",
+        "stock_tags",
+        "tags",
+        "raw_payload",
+    )
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "summary",
+        "industry_tags",
+        "concept_tags",
+        "stock_tags",
+        "tags",
+        "credibility",
+        "updated_at",
+    )
+
+    news_id: str = Field(default_factory=lambda: _new_identifier("news"))
+    title: str
+    content: str = ""
+    summary: str = ""
+    source: str
+    source_url: str | None = None
+    published_at: datetime | None = None
+    market: str = "unknown"
+    industry_tags: list[str] = Field(default_factory=list)
+    concept_tags: list[str] = Field(default_factory=list)
+    stock_tags: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    credibility: float = Field(default=0.5, ge=0.0, le=1.0)
+    dedupe_key: str
+    raw_payload: dict[str, Any] = Field(default_factory=dict)

@@ -28,6 +28,14 @@ class TaskArtifactRepository(Protocol):
     async def add(self, artifact: Any) -> Any: ...
 
 
+class NewsRepository(Protocol):
+    """新闻条目的读写接口。"""
+
+    async def add(self, news: Any) -> Any: ...
+    async def add_many(self, items: Sequence[Any]) -> Sequence[Any]: ...
+    async def exists_by_dedupe_key(self, dedupe_key: str) -> bool: ...
+
+
 class CandidateRepository(Protocol):
     """候选池查询与写入接口。"""
 
@@ -60,6 +68,7 @@ class UnitOfWork(Protocol):
     task_runs: TaskRunRepository
     task_events: TaskEventRepository
     task_artifacts: TaskArtifactRepository
+    news: NewsRepository
     candidates: CandidateRepository
     memories: MemoryRepository
     signals: SignalRepository

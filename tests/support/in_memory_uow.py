@@ -9,6 +9,7 @@ class InMemoryEventStore:
     task_runs: list[Any] = field(default_factory=list)
     task_events: list[Any] = field(default_factory=list)
     task_artifacts: list[Any] = field(default_factory=list)
+    news_items: list[Any] = field(default_factory=list)
     candidates: list[Any] = field(default_factory=list)
     memories: list[Any] = field(default_factory=list)
     signals: list[Any] = field(default_factory=list)
@@ -67,6 +68,22 @@ class _InMemoryTaskArtifactRepository:
         return artifact
 
 
+class _InMemoryNewsRepository:
+    def __init__(self, store: InMemoryEventStore) -> None:
+        self._store = store
+
+    async def add(self, news: Any) -> Any:
+        self._store.news_items.append(news)
+        return news
+
+    async def add_many(self, items: list[Any]) -> list[Any]:
+        self._store.news_items.extend(items)
+        return items
+
+    async def exists_by_dedupe_key(self, dedupe_key: str) -> bool:
+        return any(getattr(item, "dedupe_key", None) == dedupe_key for item in self._store.news_items)
+
+
 class _InMemoryCandidateRepository:
     def __init__(self, store: InMemoryEventStore) -> None:
         self._store = store
@@ -113,6 +130,7 @@ class InMemoryUnitOfWork:
         self.task_runs = _InMemoryTaskRunRepository(self.store)
         self.task_events = _InMemoryTaskEventRepository(self.store)
         self.task_artifacts = _InMemoryTaskArtifactRepository(self.store)
+        self.news = _InMemoryNewsRepository(self.store)
         self.candidates = _InMemoryCandidateRepository(self.store)
         self.memories = _InMemoryMemoryRepository(self.store)
         self.signals = _InMemorySignalRepository(self.store)
