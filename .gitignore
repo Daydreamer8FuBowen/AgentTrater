@@ -67,3 +67,8 @@ htmlcov/
 
 # Docker volumes / local data
 data/
+
+# Frontend dependencies / build outputs
+node_modules/
+frontend/admin-console/node_modules/
+frontend/admin-console/dist/
