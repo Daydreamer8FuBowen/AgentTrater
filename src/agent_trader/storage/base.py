@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from typing import Any, Protocol
 
 from agent_trader.domain.models import Candle, Candidate, MemoryRecord, SignalSnapshot
+from agent_trader.ingestion.models import DataRouteKey
 
 
 class TaskRunRepository(Protocol):
@@ -62,6 +63,38 @@ class CandleRepository(Protocol):
     async def write_batch(self, candles: Sequence[Candle]) -> None: ...
 
 
+class SourcePriorityRepository(Protocol):
+    """路由优先级配置仓储接口。"""
+
+    async def get(self, route_key: DataRouteKey) -> Any | None: ...
+    async def upsert(
+        self,
+        route_key: DataRouteKey,
+        *,
+        priorities: list[str],
+        enabled: bool = True,
+        metadata: dict[str, Any] | None = None,
+    ) -> Any: ...
+    async def reorder(self, route_key: DataRouteKey, *, priorities: list[str]) -> None: ...
+
+
+class SourceRouteHealthRepository(Protocol):
+    """路由源健康状态仓储接口。"""
+
+    async def get(self, route_id: str, source: str) -> Any | None: ...
+    async def record_success(self, route_id: str, source: str) -> None: ...
+    async def record_failure(
+        self,
+        route_id: str,
+        source: str,
+        *,
+        error_message: str,
+        open_until: Any,
+    ) -> None: ...
+    async def list_retryable(self, *, now: Any, limit: int = 100) -> Sequence[Any]: ...
+    async def clear_circuit(self, route_id: str, source: str) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """把一次业务操作涉及的多仓储写入收敛到同一个事务边界。"""
 
@@ -73,6 +106,8 @@ class UnitOfWork(Protocol):
     memories: MemoryRepository
     signals: SignalRepository
     candles: CandleRepository
+    source_priorities: SourcePriorityRepository
+    source_route_health: SourceRouteHealthRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...

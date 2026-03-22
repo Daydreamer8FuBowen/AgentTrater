@@ -50,6 +50,20 @@ class WorkerConfig(BaseModel):
     backtest_interval_seconds: int
 
 
+class DataRoutingConfig(BaseModel):
+    """统一数据源路由配置。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool
+    health_check_interval_seconds: int
+    rebalance_interval_seconds: int
+    failure_threshold: int
+    circuit_open_seconds: int
+    promotion_step: int
+    promote_on_success: bool
+
+
 class AgentRuntimeConfig(BaseModel):
     """Agent 运行时配置。"""
 
@@ -89,6 +103,16 @@ class TuShareConfig(BaseModel):
     http_url: str
 
 
+class BaoStockConfig(BaseModel):
+    """BaoStock 数据源配置（用于构建 `BaoStockSource`）。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    password: str
+    options: int
+
+
 class Settings(BaseSettings):
     """统一配置入口。
 
@@ -124,6 +148,20 @@ class Settings(BaseSettings):
         alias="WORKER_BACKTEST_INTERVAL_SECONDS",
     )
 
+    data_routing_enabled: bool = Field(default=True, alias="DATA_ROUTING_ENABLED")
+    data_routing_health_check_interval_seconds: int = Field(
+        default=60,
+        alias="DATA_ROUTING_HEALTH_CHECK_INTERVAL_SECONDS",
+    )
+    data_routing_rebalance_interval_seconds: int = Field(
+        default=300,
+        alias="DATA_ROUTING_REBALANCE_INTERVAL_SECONDS",
+    )
+    data_routing_failure_threshold: int = Field(default=3, alias="DATA_ROUTING_FAILURE_THRESHOLD")
+    data_routing_circuit_open_seconds: int = Field(default=120, alias="DATA_ROUTING_CIRCUIT_OPEN_SECONDS")
+    data_routing_promotion_step: int = Field(default=1, alias="DATA_ROUTING_PROMOTION_STEP")
+    data_routing_promote_on_success: bool = Field(default=True, alias="DATA_ROUTING_PROMOTE_ON_SUCCESS")
+
     agent_max_concurrency: int = Field(default=4, alias="AGENT_MAX_CONCURRENCY")
     agent_default_timeout_seconds: int = Field(default=120, alias="AGENT_DEFAULT_TIMEOUT_SECONDS")
     agent_checkpoint_enabled: bool = Field(default=True, alias="AGENT_CHECKPOINT_ENABLED")
@@ -139,6 +177,9 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.1, alias="OPENAI_TEMPERATURE")
 
     tushare_token: str = Field(default="", alias="TUSHARE_TOKEN")
+    baostock_user_id: str = Field(default="anonymous", alias="BAOSTOCK_USER_ID")
+    baostock_password: str = Field(default="123456", alias="BAOSTOCK_PASSWORD")
+    baostock_options: int = Field(default=0, alias="BAOSTOCK_OPTIONS")
 
     model_config = SettingsConfigDict(
         env_file=(".env.local", ".env"),
@@ -187,6 +228,18 @@ class Settings(BaseSettings):
         )
 
     @property
+    def data_routing(self) -> DataRoutingConfig:
+        return DataRoutingConfig(
+            enabled=self.data_routing_enabled,
+            health_check_interval_seconds=self.data_routing_health_check_interval_seconds,
+            rebalance_interval_seconds=self.data_routing_rebalance_interval_seconds,
+            failure_threshold=self.data_routing_failure_threshold,
+            circuit_open_seconds=self.data_routing_circuit_open_seconds,
+            promotion_step=self.data_routing_promotion_step,
+            promote_on_success=self.data_routing_promote_on_success,
+        )
+
+    @property
     def agent(self) -> AgentRuntimeConfig:
         return AgentRuntimeConfig(
             max_concurrency=self.agent_max_concurrency,
@@ -216,6 +269,15 @@ class Settings(BaseSettings):
         return TuShareConfig(
             token=self.tushare_token,
             http_url="http://lianghua.nanyangqiankun.top",
+        )
+
+    @property
+    def baostock(self) -> BaoStockConfig:
+        """返回 BaoStock 配置，用于 `BaoStockSource.from_settings`。"""
+        return BaoStockConfig(
+            user_id=self.baostock_user_id,
+            password=self.baostock_password,
+            options=self.baostock_options,
         )
 
 

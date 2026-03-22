@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import json
+from dataclasses import asdict
 
 import pytest
 
@@ -9,7 +10,7 @@ from agent_trader.agents.news_preprocess_agent import NewsPreprocessAgent
 from agent_trader.agents.models import get_agent_model_registry
 from agent_trader.data_fetch.models import CleanedNewsItem
 
-
+# $env:REAL_AGENT_TEST = "1"; e:/codes/AgentTrader/.venv/Scripts/python.exe -m pytest tests/integration/test_real_agent_integration.py -q
 @pytest.mark.skipif(os.getenv("REAL_AGENT_TEST") != "1", reason="Real agent tests disabled, set REAL_AGENT_TEST=1 to enable")
 def test_real_news_preprocess_agent_runs_and_returns_cleaned_item() -> None:
     """调用真实 Agent 并验证返回类型与基础字段（默认跳过，需设置 REAL_AGENT_TEST=1）。"""
@@ -21,6 +22,6 @@ def test_real_news_preprocess_agent_runs_and_returns_cleaned_item() -> None:
     }
     item = agent.clean(source="eastmoney", payload=payload)
     # 打印以便手动查看（测试输出），并进行基本断言保证形状正确
-    print(json.dumps(item.__dict__, default=str, ensure_ascii=False, indent=2))
+    print(json.dumps(asdict(item), default=str, ensure_ascii=False, indent=2))
     assert isinstance(item, CleanedNewsItem)
     assert item.title

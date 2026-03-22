@@ -3,8 +3,15 @@ import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from agent_trader.domain.models import TriggerKind
-from agent_trader.ingestion.models import NormalizedEvent, RawEvent, ResearchTrigger
+from agent_trader.domain.models import BarInterval, TriggerKind
+from agent_trader.ingestion.models import (
+    FetchMode,
+    KlineQuery,
+    NormalizedEvent,
+    RawEvent,
+    ResearchTrigger,
+    SourceFetchResult,
+)
 from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
@@ -37,52 +44,38 @@ class TestTuShareSource:
             mock_api_instance._DataApi__http_url = "http://lianghua.nanyangqiankun.top"
 
     @pytest.mark.asyncio
-    async def test_fetch_klines(self):
-        """测试获取 K 线数据"""
-        with patch("tushare.pro_api") as mock_api:
-            # 模拟 TuShare API 返回
+    async def test_fetch_klines_unified(self):
+        """测试通过统一接口获取 K 线数据"""
+        with patch("tushare.pro_api"), patch("tushare.pro_bar") as mock_pro_bar:
+            mock_row = MagicMock()
+            mock_row.to_dict.return_value = {
+                "ts_code": "000001.SZ",
+                "trade_date": "20240115",
+                "open": 100.0,
+                "high": 105.0,
+                "low": 98.0,
+                "close": 103.0,
+                "vol": 1000000,
+            }
             mock_df = MagicMock()
             mock_df.empty = False
-            mock_df.iterrows.return_value = [
-                (0, {
-                    "ts_code": "000001.SZ",
-                    "trade_date": "20240115",
-                    "open": 100.0,
-                    "high": 105.0,
-                    "low": 98.0,
-                    "close": 103.0,
-                    "vol": 1000000,
-                    "amount": 103000000,
-                    "to_dict": MagicMock(return_value={
-                        "ts_code": "000001.SZ",
-                        "trade_date": "20240115",
-                        "open": 100.0,
-                        "close": 103.0,
-                    })
-                })
-            ]
-
-            mock_api_instance = MagicMock()
-            mock_api_instance.daily.return_value = mock_df
-            mock_api.return_value = mock_api_instance
+            mock_df.iterrows.return_value = [(0, mock_row)]
+            mock_pro_bar.return_value = mock_df
 
             source = TuShareSource(token="test_token")
+            query = KlineQuery(
+                symbol="000001.SZ",
+                start_time=datetime(2024, 1, 1),
+                end_time=datetime(2024, 1, 31),
+                interval=BarInterval.D1,
+                mode=FetchMode.HISTORY,
+            )
+            result = await source.fetch_klines_unified(query)
 
-            # 修改返回值为包含 to_dict 方法
-            mock_df.iterrows.return_value = [
-                (0, MagicMock(to_dict=MagicMock(return_value={
-                    "ts_code": "000001.SZ",
-                    "trade_date": "20240115",
-                    "open": 100.0,
-                    "close": 103.0,
-                })))
-            ]
-
-            events = await source.fetch_klines("000001.SZ", "20240101", "20240131")
-
-            assert len(events) > 0
-            assert all(isinstance(e, RawEvent) for e in events)
-            assert events[0].source == "tushare"
+            assert isinstance(result, SourceFetchResult)
+            assert len(result.payload) == 1
+            assert result.payload[0]["ts_code"] == "000001.SZ"
+            assert result.source == "tushare"
 
     @pytest.mark.asyncio
     async def test_fetch_basic_info(self):
@@ -109,19 +102,25 @@ class TestTuShareSource:
             assert events[0].source == "tushare:stock_basic"
 
     @pytest.mark.asyncio
-    async def test_fetch_empty_result(self):
-        """测试处理空结果"""
-        with patch("tushare.pro_api") as mock_api:
+    async def test_fetch_klines_unified_empty(self):
+        """测试统一接口处理空结果"""
+        with patch("tushare.pro_api"), patch("tushare.pro_bar") as mock_pro_bar:
             mock_df = MagicMock()
             mock_df.empty = True
-            mock_api_instance = MagicMock()
-            mock_api_instance.daily.return_value = mock_df
-            mock_api.return_value = mock_api_instance
+            mock_pro_bar.return_value = mock_df
 
             source = TuShareSource(token="test_token")
-            events = await source.fetch_klines("000001.SZ", "20240101", "20240131")
+            query = KlineQuery(
+                symbol="000001.SZ",
+                start_time=datetime(2024, 1, 1),
+                end_time=datetime(2024, 1, 31),
+                interval=BarInterval.D1,
+                mode=FetchMode.HISTORY,
+            )
+            result = await source.fetch_klines_unified(query)
 
-            assert events == []
+            assert isinstance(result, SourceFetchResult)
+            assert result.payload == []
 
 
 class TestTuShareNormalizer:

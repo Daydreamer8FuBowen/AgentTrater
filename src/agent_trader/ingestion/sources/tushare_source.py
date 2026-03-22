@@ -20,9 +20,31 @@ from typing import Any
 import tushare as ts
 
 from agent_trader.domain.models import BarInterval, ExchangeKind
-from agent_trader.ingestion.models import RawEvent
+from agent_trader.ingestion.models import (
+    DataCapability,
+    DataRouteKey,
+    FetchMode,
+    KlineQuery,
+    NewsQuery,
+    RawEvent,
+    SourceCapabilitySpec,
+    SourceFetchResult,
+)
 
 logger = logging.getLogger(__name__)
+
+# BarInterval → TuShare 频率标识映射（本适配器仅支持 5min 和 日线）
+_INTERVAL_TO_FREQ: dict[BarInterval, str] = {
+    BarInterval.M5: "5min",
+    BarInterval.D1: "D",
+}
+
+# TuShare 支持的新闻源（news API 的 src 参数）
+_NEWS_SRCS = ("sina", "wallstreetcn", "10jqka", "eastmoney", "yuncaijing", "guba_eastmoney", "rss")
+
+# 此数据源的能力声明
+_SUPPORTED_KLINE_INTERVALS = tuple(_INTERVAL_TO_FREQ.keys())
+_A_SHARE_MARKETS = (ExchangeKind.SSE, ExchangeKind.SZSE)
 
 
 class TuShareSource:
@@ -72,63 +94,214 @@ class TuShareSource:
         tushare_config = settings.tushare
         return cls(token=tushare_config.token, http_url=tushare_config.http_url)
 
-    async def fetch_klines(
-        self,
-        symbol: str,
-        start_date: str,
-        end_date: str,
-        freq: str = "D",
-    ) -> list[RawEvent]:
-        """
-        异步获取 K 线数据。
+    # ------------------------------------------------------------------
+    # 统一数据能力接口（KlineDataSource / NewsDataSource 协议实现）
+    # ------------------------------------------------------------------
+
+    def capabilities(self) -> list[SourceCapabilitySpec]:
+        """声明此数据源支持的能力范围，供 DataSourceRegistry 查询。"""
+        return [
+            SourceCapabilitySpec(
+                source=self.name,
+                capability=DataCapability.KLINE,
+                modes=(FetchMode.REALTIME, FetchMode.HISTORY, FetchMode.INCREMENTAL),
+                markets=_A_SHARE_MARKETS,
+                intervals=_SUPPORTED_KLINE_INTERVALS,
+            ),
+            SourceCapabilitySpec(
+                source=self.name,
+                capability=DataCapability.NEWS,
+                modes=(FetchMode.REALTIME, FetchMode.HISTORY, FetchMode.INCREMENTAL),
+                markets=(),  # 新闻不区分市场
+            ),
+        ]
+
+    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult:
+        """实现 KlineDataSource 协议。
+
+        通过 ``ts.pro_bar`` 获取各周期 K 线，支持前复权/后复权。
 
         Args:
-            symbol: 股票代码（如 '000001.SZ' 表示平安银行）
-            start_date: 开始日期（格式：YYYYMMDD）
-            end_date: 结束日期（格式：YYYYMMDD）
-            freq: 数据频率（D=日线，W=周线，M=月线）
+            query: K 线查询参数，包含 symbol、时间范围、周期、复权标志等。
 
         Returns:
-            RawEvent 列表，每条 K 线数据包装为一个事件
+            SourceFetchResult，payload 中每条记录包含 TuShare 原始字段
+            以及归一化的 ``bar_time`` (datetime) 和 ``freq`` (str)。
 
-        Examples:
-            >>> source = TuShareSource(token="your_token")
-            >>> events = await source.fetch_klines("000001.SZ", "20240101", "20240131")
+        Raises:
+            ValueError: 不支持的 BarInterval（如 M3、H4）。
+            Exception: TuShare API 调用失败时向上传播，由 Gateway/选择器处理熔断。
         """
-        try:
-            # 在线程池中运行同步操作以避免阻塞事件循环
-            df = await asyncio.to_thread(
-                self.pro.daily,
-                ts_code=symbol,
-                start_date=start_date,
-                end_date=end_date,
-                freq=freq,
+        freq = _INTERVAL_TO_FREQ.get(query.interval)
+        if freq is None:
+            raise ValueError(
+                f"TuShare 不支持 BarInterval={query.interval.value}，"
+                f"支持范围：{list(_INTERVAL_TO_FREQ.keys())}"
             )
 
+        adj: str | None = "qfq" if query.adjusted else None
+        # 日线以上用 YYYYMMDD；分钟线也接受 YYYYMMDD（TuShare 内部会处理）
+        start_str = query.start_time.strftime("%Y%m%d")
+        end_str = query.end_time.strftime("%Y%m%d")
+
+        route_key = DataRouteKey(
+            capability=DataCapability.KLINE,
+            mode=query.mode,
+            market=query.market,
+            interval=query.interval,
+        )
+
+        df = await asyncio.to_thread(
+            ts.pro_bar,
+            ts_code=query.symbol,
+            adj=adj,
+            start_date=start_str,
+            end_date=end_str,
+            freq=freq,
+            api=self.pro,
+        )
+
+        if df is None or df.empty:
+            logger.warning(
+                "fetch_klines_unified: no data symbol=%s freq=%s [%s, %s]",
+                query.symbol, freq, start_str, end_str,
+            )
+            return SourceFetchResult(
+                source=self.name,
+                route_key=route_key,
+                payload=[],
+                metadata={"symbol": query.symbol, "freq": freq, "count": 0},
+            )
+
+        payload: list[dict[str, Any]] = []
+        for _, row in df.iterrows():
+            record: dict[str, Any] = row.to_dict()
+            # 归一化时间字段：分钟线用 trade_time，日线用 trade_date
+            if "trade_time" in record and record["trade_time"] is not None:
+                record["bar_time"] = datetime.strptime(
+                    str(record["trade_time"]), "%Y-%m-%d %H:%M:%S"
+                )
+            elif "trade_date" in record and record["trade_date"] is not None:
+                record["bar_time"] = datetime.strptime(
+                    str(record["trade_date"]), "%Y%m%d"
+                )
+            record["_freq"] = freq
+            payload.append(record)
+
+        logger.info(
+            "fetch_klines_unified: fetched %d bars symbol=%s freq=%s",
+            len(payload), query.symbol, freq,
+        )
+        return SourceFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=payload,
+            metadata={"symbol": query.symbol, "freq": freq, "count": len(payload)},
+        )
+
+    async def fetch_news_unified(self, query: NewsQuery) -> SourceFetchResult:
+        """实现 NewsDataSource 协议。
+
+        通过 TuShare ``news`` 接口按时间段拉取新闻，支持：
+        - 多新闻源（通过 ``query.extra["src"]`` 指定，默认 ``"sina"``）
+        - 关键词过滤（在 title + content 中做 OR 匹配，不区分大小写）
+        - 股票代码过滤（对 ``channels`` 字段做包含匹配）
+
+        出于权限成本考虑，默认只查询单个 src；如需多源聚合，可在
+        ``query.extra["src"]`` 中传入逗号分隔的字符串，例如
+        ``"sina,eastmoney"``，本方法会并发获取并合并去重。
+
+        Args:
+            query: 新闻查询参数。
+
+        Returns:
+            SourceFetchResult，payload 中每条记录包含 TuShare 原始字段。
+
+        Raises:
+            Exception: TuShare API 调用失败时向上传播。
+        """
+        route_key = DataRouteKey(
+            capability=DataCapability.NEWS,
+            mode=query.mode,
+            market=query.market,
+        )
+
+        # 解析新闻数据源（可在 extra 中覆盖，逗号分隔支持多源）
+        raw_src: str = query.extra.get("src", "sina")
+        sources = [s.strip() for s in raw_src.split(",") if s.strip() in _NEWS_SRCS]
+        if not sources:
+            logger.warning("fetch_news_unified: unknown src=%s, fallback to sina", raw_src)
+            sources = ["sina"]
+
+        # 构建时间参数（TuShare 要求 "YYYYMMDD HH:MM:SS" 格式）
+        start_str = (
+            query.start_time.strftime("%Y%m%d %H:%M:%S") if query.start_time else None
+        )
+        end_str = (
+            query.end_time.strftime("%Y%m%d %H:%M:%S") if query.end_time else None
+        )
+
+        async def _fetch_one_src(src: str) -> list[dict[str, Any]]:
+            kwargs: dict[str, Any] = {"src": src}
+            if start_str:
+                kwargs["start_date"] = start_str
+            if end_str:
+                kwargs["end_date"] = end_str
+            df = await asyncio.to_thread(self.pro.news, **kwargs)
             if df is None or df.empty:
-                logger.warning(f"No kline data found for {symbol}")
                 return []
+            return [row.to_dict() for _, row in df.iterrows()]
 
-            # 将每行数据转换为 RawEvent
-            events = []
-            for _, row in df.iterrows():
-                payload = row.to_dict()
-                # 转换日期格式为 datetime
-                payload["trade_date"] = datetime.strptime(
-                    str(payload["trade_date"]), "%Y%m%d"
+        # 并发拉取多个新闻源
+        results: list[list[dict[str, Any]]] = await asyncio.gather(
+            *[_fetch_one_src(src) for src in sources]
+        )
+
+        # 合并、去重（以 datetime+title 为唯一键）
+        seen: set[tuple[str, str]] = set()
+        merged: list[dict[str, Any]] = []
+        for records in results:
+            for rec in records:
+                key = (str(rec.get("datetime", "")), str(rec.get("title", "")))
+                if key in seen:
+                    continue
+                seen.add(key)
+                merged.append(rec)
+
+        # 关键词过滤（OR 语义，不区分大小写）
+        if query.keywords:
+            kws = [kw.lower() for kw in query.keywords]
+            merged = [
+                rec for rec in merged
+                if any(
+                    kw in (rec.get("title", "") + " " + rec.get("content", "")).lower()
+                    for kw in kws
                 )
-                event = RawEvent(
-                    source=self.name,
-                    payload=payload,
-                )
-                events.append(event)
+            ]
 
-            logger.info(f"Fetched {len(events)} klines for {symbol}")
-            return events
+        # 股票代码过滤（模糊匹配 channels 字段）
+        if query.symbol:
+            sym = query.symbol
+            merged = [
+                rec for rec in merged
+                if sym in str(rec.get("channels", ""))
+            ]
 
-        except Exception as e:
-            logger.error(f"Error fetching klines for {symbol}: {e}")
-            return []
+        logger.info(
+            "fetch_news_unified: fetched %d records src=%s keywords=%s symbol=%s",
+            len(merged), sources, query.keywords, query.symbol,
+        )
+        return SourceFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=merged,
+            metadata={
+                "sources": sources,
+                "count": len(merged),
+                "keywords": query.keywords,
+                "symbol": query.symbol,
+            },
+        )
 
     async def fetch_basic_info(self) -> list[RawEvent]:
         """
@@ -203,24 +376,15 @@ class TuShareSource:
 
     async def fetch(self) -> list[RawEvent]:
         """
-        默认的 fetch 方法，获取最近一个交易日的所有数据。
+        默认的 fetch 方法，获取最近一个交易日的基础面数据。
 
-        实现 SourceAdapter 协议的要求方法。
+        实现 SourceAdapter 协议的要求方法。K 线数据请使用 fetch_klines_unified()。
 
         Returns:
             RawEvent 列表
         """
         try:
-            # 并发获取多个数据源
-            klines, basic = await asyncio.gather(
-                self.fetch_klines(
-                    symbol="000001.SZ",
-                    start_date=(datetime.now() - timedelta(days=1)).strftime("%Y%m%d"),
-                    end_date=datetime.now().strftime("%Y%m%d"),
-                ),
-                self.fetch_daily_basic(),
-            )
-            return klines + basic
+            return await self.fetch_daily_basic()
         except Exception as e:
             logger.error(f"Error in default fetch: {e}")
             return []

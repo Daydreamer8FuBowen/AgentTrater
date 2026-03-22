@@ -24,6 +24,8 @@ async def main():
     """
     from agent_trader.ingestion.sources.tushare_source import TuShareSource
     from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
+    from agent_trader.domain.models import BarInterval
+    from agent_trader.ingestion.models import FetchMode, KlineQuery, RawEvent
     from datetime import datetime, timedelta
 
     print("=" * 70)
@@ -45,20 +47,24 @@ async def main():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=5)
 
-        klines = await source.fetch_klines(
-            symbol="000001.SZ",
-            start_date=start_date.strftime("%Y%m%d"),
-            end_date=end_date.strftime("%Y%m%d"),
-            freq="D",
+        kline_result = await source.fetch_klines_unified(
+            KlineQuery(
+                symbol="000001.SZ",
+                start_time=start_date,
+                end_time=end_date,
+                interval=BarInterval.D1,
+                mode=FetchMode.HISTORY,
+            )
         )
 
-        if klines:
-            print(f"✓ 成功获取 {len(klines)} 条 K 线数据")
+        if kline_result.payload:
+            print(f"✓ 成功获取 {len(kline_result.payload)} 条 K 线数据")
             print()
 
             # 规范化前 3 条
             print("📈 步骤 3: 规范化和转换...")
-            for i, raw_event in enumerate(klines[:3], 1):
+            for i, record in enumerate(kline_result.payload[:3], 1):
+                raw_event = RawEvent(source=source.name, payload=record)
                 normalized = await normalizer.normalize(raw_event)
                 if normalized:
                     trigger = await normalizer.to_trigger(normalized)

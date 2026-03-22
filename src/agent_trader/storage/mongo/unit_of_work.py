@@ -8,8 +8,24 @@ from __future__ import annotations
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from agent_trader.storage.base import CandleRepository, CandidateRepository, MemoryRepository, NewsRepository, SignalRepository, UnitOfWork
-from agent_trader.storage.mongo.repository import MongoNewsRepository, MongoTaskArtifactRepository, MongoTaskEventRepository, MongoTaskRunRepository
+from agent_trader.storage.base import (
+    CandleRepository,
+    CandidateRepository,
+    MemoryRepository,
+    NewsRepository,
+    SignalRepository,
+    SourcePriorityRepository,
+    SourceRouteHealthRepository,
+    UnitOfWork,
+)
+from agent_trader.storage.mongo.repository import (
+    MongoNewsRepository,
+    MongoSourcePriorityRepository,
+    MongoSourceRouteHealthRepository,
+    MongoTaskArtifactRepository,
+    MongoTaskEventRepository,
+    MongoTaskRunRepository,
+)
 
 
 class _UnsupportedCandidateRepository:
@@ -56,6 +72,8 @@ class MongoUnitOfWork(UnitOfWork):
         self.task_events = MongoTaskEventRepository(database)
         self.task_artifacts = MongoTaskArtifactRepository(database)
         self.news: NewsRepository = MongoNewsRepository(database)
+        self.source_priorities: SourcePriorityRepository = MongoSourcePriorityRepository(database)
+        self.source_route_health: SourceRouteHealthRepository = MongoSourceRouteHealthRepository(database)
         # 尚未接入 Mongo 的仓库（占位）
         self.candidates: CandidateRepository = _UnsupportedCandidateRepository()
         self.memories: MemoryRepository = _UnsupportedMemoryRepository()

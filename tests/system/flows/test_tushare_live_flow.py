@@ -14,6 +14,8 @@ import asyncio
 import os
 import pytest
 
+from agent_trader.domain.models import BarInterval
+from agent_trader.ingestion.models import FetchMode, KlineQuery, RawEvent
 from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
@@ -36,26 +38,26 @@ class TestTuShareLiveIntegration:
         source = TuShareSource(token=TUSHARE_TOKEN)
         normalizer = TuShareNormalizer()
 
-        # 获取平安银行最近一周的日线数据
         from datetime import datetime, timedelta
 
         end_date = datetime.now()
         start_date = end_date - timedelta(days=7)
 
-        events = await source.fetch_klines(
+        query = KlineQuery(
             symbol="000001.SZ",
-            start_date=start_date.strftime("%Y%m%d"),
-            end_date=end_date.strftime("%Y%m%d"),
-            freq="D",
+            start_time=start_date,
+            end_time=end_date,
+            interval=BarInterval.D1,
+            mode=FetchMode.HISTORY,
         )
+        result = await source.fetch_klines_unified(query)
 
-        # 验证返回结果
-        assert isinstance(events, list)
-        print(f"✓ 成功获取 {len(events)} 条 K 线数据")
+        assert isinstance(result.payload, list)
+        print(f"✓ 成功获取 {len(result.payload)} 条 K 线数据")
 
-        # 规范化数据
-        if events:
-            normalized = await normalizer.normalize(events[0])
+        if result.payload:
+            raw_event = RawEvent(source=source.name, payload=result.payload[0])
+            normalized = await normalizer.normalize(raw_event)
             assert normalized is not None
             trigger = await normalizer.to_trigger(normalized)
             print(f"✓ 规范化成功: {trigger.symbol} - {trigger.trigger_kind}")
@@ -103,23 +105,25 @@ class TestTuShareLiveIntegration:
         end_date = datetime.now()
         start_date = end_date - timedelta(days=1)
 
-        klines, basic, daily = await asyncio.gather(
-            source.fetch_klines(
-                "000001.SZ",
-                start_date.strftime("%Y%m%d"),
-                end_date.strftime("%Y%m%d")
-            ),
+        klines_result, basic, daily = await asyncio.gather(
+            source.fetch_klines_unified(KlineQuery(
+                symbol="000001.SZ",
+                start_time=start_date,
+                end_time=end_date,
+                interval=BarInterval.D1,
+                mode=FetchMode.HISTORY,
+            )),
             source.fetch_basic_info(),
             source.fetch_daily_basic(),
         )
 
         print(f"\n✓ 完整流程:")
-        print(f"  - K线: {len(klines)} 条")
+        print(f"  - K线: {len(klines_result.payload)} 条")
         print(f"  - 基本信息: {len(basic)} 条")
         print(f"  - 每日基础面: {len(daily)} 条")
 
-        # 规范化示例
-        all_events = klines + basic + daily
+        # 规范化示例（仅对 basic 和 daily 使用旧规范化器）
+        all_events = basic + daily
         normalized_count = 0
         for event in all_events[:5]:
             normalized = await normalizer.normalize(event)

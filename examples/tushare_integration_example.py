@@ -6,6 +6,8 @@ TuShare 数据源集成示例
 import asyncio
 from datetime import datetime, timedelta
 
+from agent_trader.domain.models import BarInterval
+from agent_trader.ingestion.models import FetchMode, KlineQuery, RawEvent
 from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
@@ -32,17 +34,21 @@ async def example_fetch_and_normalize():
         end_date = datetime.now()
         start_date = end_date - timedelta(days=30)
 
-        klines = await source.fetch_klines(
-            symbol="000001.SZ",
-            start_date=start_date.strftime("%Y%m%d"),
-            end_date=end_date.strftime("%Y%m%d"),
-            freq="D",
+        kline_result = await source.fetch_klines_unified(
+            KlineQuery(
+                symbol="000001.SZ",
+                start_time=start_date,
+                end_time=end_date,
+                interval=BarInterval.D1,
+                mode=FetchMode.HISTORY,
+            )
         )
 
-        print(f"✓ 获取了 {len(klines)} 条 K 线数据\n")
+        print(f"✓ 获取了 {len(kline_result.payload)} 条 K 线数据\n")
 
         # 规范化 K 线数据
-        for raw_event in klines[:3]:  # 仅显示前 3 条
+        for record in kline_result.payload[:3]:  # 仅显示前 3 条
+            raw_event = RawEvent(source=source.name, payload=record)
             normalized = await normalizer.normalize(raw_event)
             if normalized:
                 trigger = await normalizer.to_trigger(normalized)

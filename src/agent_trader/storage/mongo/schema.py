@@ -19,6 +19,8 @@ from agent_trader.storage.mongo.documents import (
     NewsDocument,
     SkillDefinitionDocument,
     SkillVersionDocument,
+    SourcePriorityRouteDocument,
+    SourceRouteHealthDocument,
     TaskArtifactDocument,
     TaskCheckpointDocument,
     TaskEventDocument,
@@ -149,6 +151,31 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
                 IndexModel([("stock_tags", ASCENDING), ("published_at", DESCENDING)]),
                 IndexModel([("concept_tags", ASCENDING), ("published_at", DESCENDING)]),
                 IndexModel([("credibility", DESCENDING), ("published_at", DESCENDING)]),
+            ),
+        ),
+        _document_config(
+            SourcePriorityRouteDocument,
+            indexes=(
+                IndexModel([(SourcePriorityRouteDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel(
+                    [
+                        ("capability", ASCENDING),
+                        ("mode", ASCENDING),
+                        ("market", ASCENDING),
+                        ("interval", ASCENDING),
+                    ],
+                    unique=True,
+                ),
+                IndexModel([("enabled", ASCENDING), ("updated_at", DESCENDING)]),
+            ),
+        ),
+        _document_config(
+            SourceRouteHealthDocument,
+            indexes=(
+                IndexModel([(SourceRouteHealthDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel([("route_id", ASCENDING), ("source", ASCENDING)], unique=True),
+                IndexModel([("status", ASCENDING), ("next_retry_at", ASCENDING)]),
+                IndexModel([("updated_at", DESCENDING)]),
             ),
         ),
     )
