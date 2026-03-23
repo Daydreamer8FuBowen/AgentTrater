@@ -338,7 +338,6 @@ class SourcePriorityRouteDocument(TimestampedDocument):
     searchable_fields: ClassVar[tuple[str, ...]] = (
         "route_id",
         "capability",
-        "mode",
         "market",
         "interval",
         "enabled",
@@ -353,53 +352,8 @@ class SourcePriorityRouteDocument(TimestampedDocument):
 
     route_id: str
     capability: str
-    mode: str
     market: str | None = None
     interval: str | None = None
     priorities: list[str] = Field(default_factory=list)
     enabled: bool = True
-    metadata: dict[str, Any] = Field(default_factory=dict)
-
-
-class SourceRouteHealthDocument(TimestampedDocument):
-    """数据源路由运行状态文档。"""
-
-    collection_name: ClassVar[str] = "source_route_health"
-    primary_key: ClassVar[str] = "state_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = (
-        "state_id",
-        "route_id",
-        "source",
-        "status",
-        "next_retry_at",
-    )
-    json_fields: ClassVar[tuple[str, ...]] = ("metadata",)
-    editable_fields: ClassVar[tuple[str, ...]] = (
-        "status",
-        "success_count",
-        "failure_count",
-        "consecutive_failures",
-        "dynamic_weight",
-        "last_success_at",
-        "last_failure_at",
-        "last_error",
-        "circuit_open_until",
-        "next_retry_at",
-        "metadata",
-        "updated_at",
-    )
-
-    state_id: str = Field(default_factory=lambda: _new_identifier("route_state"))
-    route_id: str
-    source: str
-    status: Literal["active", "degraded", "open", "cooldown"] = "active"
-    success_count: int = 0
-    failure_count: int = 0
-    consecutive_failures: int = 0
-    dynamic_weight: int = 0
-    last_success_at: datetime | None = None
-    last_failure_at: datetime | None = None
-    last_error: str | None = None
-    circuit_open_until: datetime | None = None
-    next_retry_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)

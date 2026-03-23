@@ -21,7 +21,6 @@ from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
     DataCapability,
     DataRouteKey,
-    FetchMode,
     FinancialReportQuery,
     KlineQuery,
     RawEvent,
@@ -98,14 +97,12 @@ class BaoStockSource:
             SourceCapabilitySpec(
                 source=self.name,
                 capability=DataCapability.KLINE,
-                modes=(FetchMode.REALTIME, FetchMode.HISTORY, FetchMode.INCREMENTAL),
                 markets=_A_SHARE_MARKETS,
                 intervals=_SUPPORTED_KLINE_INTERVALS,
             ),
             SourceCapabilitySpec(
                 source=self.name,
                 capability=DataCapability.FINANCIAL_REPORT,
-                modes=(FetchMode.HISTORY, FetchMode.INCREMENTAL),
                 markets=_A_SHARE_MARKETS,
             ),
         ]
@@ -123,7 +120,6 @@ class BaoStockSource:
         fields = _DAYLIKE_FIELDS if freq in _DAYLIKE_FREQS else _MINUTE_FIELDS
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
-            mode=query.mode,
             market=query.market,
             interval=query.interval,
         )
@@ -158,7 +154,6 @@ class BaoStockSource:
         """通过 BaoStock 获取财务报表与业绩类数据。"""
         route_key = DataRouteKey(
             capability=DataCapability.FINANCIAL_REPORT,
-            mode=query.mode,
             market=query.market,
         )
 

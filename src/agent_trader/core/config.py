@@ -56,12 +56,6 @@ class DataRoutingConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     enabled: bool
-    health_check_interval_seconds: int
-    rebalance_interval_seconds: int
-    failure_threshold: int
-    circuit_open_seconds: int
-    promotion_step: int
-    promote_on_success: bool
 
 
 class AgentRuntimeConfig(BaseModel):
@@ -104,7 +98,7 @@ class TuShareConfig(BaseModel):
 
 
 class BaoStockConfig(BaseModel):
-    """BaoStock 数据源配置（用于构建 `BaoStockSource`）。"""
+    """BaoStock 数据源配置。"""
 
     model_config = ConfigDict(frozen=True)
 
@@ -128,6 +122,8 @@ class Settings(BaseSettings):
     app_debug: bool = Field(default=True, alias="APP_DEBUG")
 
     mongo_dsn: str = Field(default="mongodb://localhost:27017", alias="MONGO_DSN")
+    mongo_username: str | None = Field(default=None, alias="MONGO_USERNAME")
+    mongo_password: str | None = Field(default=None, alias="MONGO_PASSWORD")
     mongo_database: str = Field(default="agent_trader", alias="MONGO_DATABASE")
     mongo_app_name: str = Field(default="agent-trader", alias="MONGO_APP_NAME")
 
@@ -149,18 +145,6 @@ class Settings(BaseSettings):
     )
 
     data_routing_enabled: bool = Field(default=True, alias="DATA_ROUTING_ENABLED")
-    data_routing_health_check_interval_seconds: int = Field(
-        default=60,
-        alias="DATA_ROUTING_HEALTH_CHECK_INTERVAL_SECONDS",
-    )
-    data_routing_rebalance_interval_seconds: int = Field(
-        default=300,
-        alias="DATA_ROUTING_REBALANCE_INTERVAL_SECONDS",
-    )
-    data_routing_failure_threshold: int = Field(default=3, alias="DATA_ROUTING_FAILURE_THRESHOLD")
-    data_routing_circuit_open_seconds: int = Field(default=120, alias="DATA_ROUTING_CIRCUIT_OPEN_SECONDS")
-    data_routing_promotion_step: int = Field(default=1, alias="DATA_ROUTING_PROMOTION_STEP")
-    data_routing_promote_on_success: bool = Field(default=True, alias="DATA_ROUTING_PROMOTE_ON_SUCCESS")
 
     agent_max_concurrency: int = Field(default=4, alias="AGENT_MAX_CONCURRENCY")
     agent_default_timeout_seconds: int = Field(default=120, alias="AGENT_DEFAULT_TIMEOUT_SECONDS")
@@ -202,8 +186,19 @@ class Settings(BaseSettings):
 
     @property
     def mongo(self) -> MongoConfig:
+        # 支持通过 MONGO_USERNAME / MONGO_PASSWORD 可选地在原始 DSN 前填充凭据。
+        dsn = self.mongo_dsn
+        if self.mongo_username:
+            cred = self.mongo_username
+            if self.mongo_password:
+                cred = f"{cred}:{self.mongo_password}"
+            # 仅当 DSN 中还没有凭据且包含 // 时插入用户名:密码@
+            if "//" in dsn and "@" not in dsn:
+                scheme, rest = dsn.split("//", 1)
+                dsn = f"{scheme}//{cred}@{rest}"
+
         return MongoConfig(
-            dsn=self.mongo_dsn,
+            dsn=dsn,
             database=self.mongo_database,
             app_name=self.mongo_app_name,
         )
@@ -231,12 +226,6 @@ class Settings(BaseSettings):
     def data_routing(self) -> DataRoutingConfig:
         return DataRoutingConfig(
             enabled=self.data_routing_enabled,
-            health_check_interval_seconds=self.data_routing_health_check_interval_seconds,
-            rebalance_interval_seconds=self.data_routing_rebalance_interval_seconds,
-            failure_threshold=self.data_routing_failure_threshold,
-            circuit_open_seconds=self.data_routing_circuit_open_seconds,
-            promotion_step=self.data_routing_promotion_step,
-            promote_on_success=self.data_routing_promote_on_success,
         )
 
     @property
@@ -273,7 +262,7 @@ class Settings(BaseSettings):
 
     @property
     def baostock(self) -> BaoStockConfig:
-        """返回 BaoStock 配置，用于 `BaoStockSource.from_settings`。"""
+        """返回 BaoStock 数据源配置。"""
         return BaoStockConfig(
             user_id=self.baostock_user_id,
             password=self.baostock_password,

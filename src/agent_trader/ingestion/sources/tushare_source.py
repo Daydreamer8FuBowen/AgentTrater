@@ -23,7 +23,6 @@ from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
     DataCapability,
     DataRouteKey,
-    FetchMode,
     KlineQuery,
     NewsQuery,
     RawEvent,
@@ -104,14 +103,12 @@ class TuShareSource:
             SourceCapabilitySpec(
                 source=self.name,
                 capability=DataCapability.KLINE,
-                modes=(FetchMode.REALTIME, FetchMode.HISTORY, FetchMode.INCREMENTAL),
                 markets=_A_SHARE_MARKETS,
                 intervals=_SUPPORTED_KLINE_INTERVALS,
             ),
             SourceCapabilitySpec(
                 source=self.name,
                 capability=DataCapability.NEWS,
-                modes=(FetchMode.REALTIME, FetchMode.HISTORY, FetchMode.INCREMENTAL),
                 markets=(),  # 新闻不区分市场
             ),
         ]
@@ -146,7 +143,6 @@ class TuShareSource:
 
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
-            mode=query.mode,
             market=query.market,
             interval=query.interval,
         )
@@ -222,7 +218,6 @@ class TuShareSource:
         """
         route_key = DataRouteKey(
             capability=DataCapability.NEWS,
-            mode=query.mode,
             market=query.market,
         )
 

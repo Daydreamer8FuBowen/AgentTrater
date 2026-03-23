@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from agent_trader.domain.models import BarInterval
-from agent_trader.ingestion.models import FetchMode, FinancialReportQuery, KlineQuery, SourceFetchResult
+from agent_trader.ingestion.models import FinancialReportQuery, KlineQuery, SourceFetchResult
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 
 
@@ -54,7 +54,6 @@ class TestBaoStockSource:
                 start_time=datetime(2024, 1, 1),
                 end_time=datetime(2024, 1, 31),
                 interval=BarInterval.D1,
-                mode=FetchMode.HISTORY,
             )
 
             fetch_result = await source.fetch_klines_unified(query)
@@ -75,7 +74,6 @@ class TestBaoStockSource:
             start_time=datetime(2024, 1, 1),
             end_time=datetime(2024, 1, 31),
             interval=BarInterval.M1,
-            mode=FetchMode.HISTORY,
         )
 
         with pytest.raises(ValueError, match="BaoStock 不支持"):
@@ -126,7 +124,6 @@ class TestBaoStockSource:
                 symbol="000001.SZ",
                 start_time=datetime(2024, 1, 1),
                 end_time=datetime(2024, 6, 30),
-                mode=FetchMode.HISTORY,
                 extra={"report_types": ["profit", "forecast"]},
             )
 
@@ -146,7 +143,6 @@ class TestBaoStockSource:
             symbol="000001.SZ",
             start_time=datetime(2024, 1, 1),
             end_time=datetime(2024, 3, 31),
-            mode=FetchMode.HISTORY,
             extra={"report_types": ["unknown"]},
         )
 

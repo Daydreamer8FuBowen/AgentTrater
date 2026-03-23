@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from agent_trader.domain.models import BarInterval, TriggerKind
 from agent_trader.ingestion.models import (
-    FetchMode,
     KlineQuery,
     NormalizedEvent,
     RawEvent,
@@ -68,7 +67,6 @@ class TestTuShareSource:
                 start_time=datetime(2024, 1, 1),
                 end_time=datetime(2024, 1, 31),
                 interval=BarInterval.D1,
-                mode=FetchMode.HISTORY,
             )
             result = await source.fetch_klines_unified(query)
 
@@ -115,7 +113,6 @@ class TestTuShareSource:
                 start_time=datetime(2024, 1, 1),
                 end_time=datetime(2024, 1, 31),
                 interval=BarInterval.D1,
-                mode=FetchMode.HISTORY,
             )
             result = await source.fetch_klines_unified(query)
 

@@ -15,7 +15,7 @@ import os
 import pytest
 
 from agent_trader.domain.models import BarInterval
-from agent_trader.ingestion.models import FetchMode, KlineQuery, RawEvent
+from agent_trader.ingestion.models import KlineQuery, RawEvent
 from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
@@ -48,7 +48,6 @@ class TestTuShareLiveIntegration:
             start_time=start_date,
             end_time=end_date,
             interval=BarInterval.D1,
-            mode=FetchMode.HISTORY,
         )
         result = await source.fetch_klines_unified(query)
 
@@ -111,7 +110,6 @@ class TestTuShareLiveIntegration:
                 start_time=start_date,
                 end_time=end_date,
                 interval=BarInterval.D1,
-                mode=FetchMode.HISTORY,
             )),
             source.fetch_basic_info(),
             source.fetch_daily_basic(),

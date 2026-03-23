@@ -15,7 +15,6 @@ from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.storage.mongo.documents import (
     NewsDocument,
     SourcePriorityRouteDocument,
-    SourceRouteHealthDocument,
     TaskArtifactDocument,
     TaskEventDocument,
     TaskRunDocument,
@@ -158,7 +157,6 @@ class MongoSourcePriorityRepository:
         route = SourcePriorityRouteDocument(
             route_id=route_key.as_storage_key(),
             capability=route_key.capability.value,
-            mode=route_key.mode.value,
             market=route_key.market.value if route_key.market else None,
             interval=route_key.interval.value if route_key.interval else None,
             priorities=priorities,
@@ -178,111 +176,6 @@ class MongoSourcePriorityRepository:
             {
                 "$set": {
                     "priorities": priorities,
-                    "updated_at": datetime.utcnow(),
-                }
-            },
-        )
-
-
-class MongoSourceRouteHealthRepository:
-    """数据源路由运行状态仓储。"""
-
-    def __init__(self, database: AsyncIOMotorDatabase) -> None:
-        self._collection = database[SourceRouteHealthDocument.collection_name]
-
-    async def get(self, route_id: str, source: str) -> SourceRouteHealthDocument | None:
-        payload = await self._collection.find_one(
-            {"route_id": route_id, "source": source},
-            {"_id": 0},
-        )
-        return None if payload is None else SourceRouteHealthDocument.model_validate(payload)
-
-    async def record_success(self, route_id: str, source: str) -> None:
-        now = datetime.utcnow()
-        await self._collection.update_one(
-            {"route_id": route_id, "source": source},
-            {
-                "$set": {
-                    "status": "active",
-                    "last_success_at": now,
-                    "last_error": None,
-                    "updated_at": now,
-                },
-                "$inc": {
-                    "success_count": 1,
-                    "dynamic_weight": 1,
-                },
-                "$setOnInsert": {
-                    "route_id": route_id,
-                    "source": source,
-                    "consecutive_failures": 0,
-                    "failure_count": 0,
-                },
-            },
-            upsert=True,
-        )
-        await self._collection.update_one(
-            {"route_id": route_id, "source": source},
-            {"$set": {"consecutive_failures": 0}},
-        )
-
-    async def record_failure(
-        self,
-        route_id: str,
-        source: str,
-        *,
-        error_message: str,
-        open_until: datetime | None,
-    ) -> None:
-        now = datetime.utcnow()
-        status = "open" if open_until else "degraded"
-        await self._collection.update_one(
-            {"route_id": route_id, "source": source},
-            {
-                "$set": {
-                    "status": status,
-                    "last_failure_at": now,
-                    "last_error": error_message,
-                    "circuit_open_until": open_until,
-                    "next_retry_at": open_until,
-                    "updated_at": now,
-                },
-                "$inc": {
-                    "failure_count": 1,
-                    "consecutive_failures": 1,
-                    "dynamic_weight": -1,
-                },
-                "$setOnInsert": {
-                    "route_id": route_id,
-                    "source": source,
-                    "success_count": 0,
-                },
-            },
-            upsert=True,
-        )
-
-    async def list_retryable(self, *, now: datetime, limit: int = 100) -> list[SourceRouteHealthDocument]:
-        cursor = self._collection.find(
-            {
-                "status": {"$in": ["degraded", "open", "cooldown"]},
-                "$or": [
-                    {"next_retry_at": None},
-                    {"next_retry_at": {"$lte": now}},
-                ],
-            },
-            {"_id": 0},
-        ).limit(limit)
-        return [SourceRouteHealthDocument.model_validate(item) async for item in cursor]
-
-    async def clear_circuit(self, route_id: str, source: str) -> None:
-        await self._collection.update_one(
-            {"route_id": route_id, "source": source},
-            {
-                "$set": {
-                    "status": "cooldown",
-                    "circuit_open_until": None,
-                    "next_retry_at": None,
-                    "consecutive_failures": 0,
                     "updated_at": datetime.utcnow(),
                 }
             },

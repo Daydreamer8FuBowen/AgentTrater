@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta
 from typing import Any
 
 from agent_trader.ingestion.models import (
@@ -43,19 +42,9 @@ class SourceSelectionAdapter:
         *,
         registry: DataSourceRegistry,
         priority_repository: Any,
-        route_health_repository: Any,
-        failure_threshold: int,
-        circuit_open_seconds: int,
-        promotion_step: int,
-        promote_on_success: bool,
     ) -> None:
         self._registry = registry
         self._priority_repository = priority_repository
-        self._route_health_repository = route_health_repository
-        self._failure_threshold = max(1, failure_threshold)
-        self._circuit_open_seconds = max(1, circuit_open_seconds)
-        self._promotion_step = max(1, promotion_step)
-        self._promote_on_success = promote_on_success
 
     async def select_sources(self, route_key: DataRouteKey) -> list[str]:
         route = await self._priority_repository.get(route_key)
@@ -69,36 +58,18 @@ class SourceSelectionAdapter:
             raise RuntimeError(f"No source registered for route={route_key.as_storage_key()}")
 
         route_id = route_key.as_storage_key()
-        now = datetime.utcnow()
         last_error: Exception | None = None
 
-        for index, source_name in enumerate(source_names):
+        for source_name in list(source_names):
             provider = self._registry.get(source_name)
             if provider is None:
                 continue
 
-            health = await self._route_health_repository.get(route_id, source_name)
-            if health is not None and health.circuit_open_until and health.circuit_open_until > now:
-                continue
-
             try:
-                result: SourceFetchResult = await invoker(source_name, provider)
-                await self._route_health_repository.record_success(route_id, source_name)
-                if self._promote_on_success and index > 0:
-                    await self._promote(route_key=route_key, source_name=source_name)
-                return result
+                return await invoker(source_name, provider)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                open_until = None
-                current_consecutive = 0 if health is None else health.consecutive_failures
-                if current_consecutive + 1 >= self._failure_threshold:
-                    open_until = now + timedelta(seconds=self._circuit_open_seconds)
-                await self._route_health_repository.record_failure(
-                    route_id,
-                    source_name,
-                    error_message=str(exc),
-                    open_until=open_until,
-                )
+                await self._move_source_to_tail(route_key=route_key, source_name=source_name, current_order=source_names)
                 logger.warning(
                     "source failed route=%s source=%s error=%s",
                     route_id,
@@ -108,19 +79,23 @@ class SourceSelectionAdapter:
 
         raise RuntimeError(f"All sources failed for route={route_id}") from last_error
 
-    async def _promote(self, *, route_key: DataRouteKey, source_name: str) -> None:
+    async def _move_source_to_tail(
+        self,
+        *,
+        route_key: DataRouteKey,
+        source_name: str,
+        current_order: list[str],
+    ) -> None:
         route = await self._priority_repository.get(route_key)
-        if route is None or source_name not in route.priorities:
+        priorities = list(route.priorities) if route is not None and route.priorities else list(current_order)
+        if source_name not in priorities:
             return
 
-        priorities = list(route.priorities)
-        old_index = priorities.index(source_name)
-        new_index = max(0, old_index - self._promotion_step)
-        if old_index == new_index:
+        priorities.remove(source_name)
+        priorities.append(source_name)
+        if route is None:
+            await self._priority_repository.upsert(route_key, priorities=priorities, enabled=True)
             return
-
-        priorities.pop(old_index)
-        priorities.insert(new_index, source_name)
         await self._priority_repository.reorder(route_key, priorities=priorities)
 
 
@@ -133,7 +108,6 @@ class DataAccessGateway:
     async def fetch_klines(self, query: KlineQuery) -> SourceFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
-            mode=query.mode,
             market=query.market,
             interval=query.interval,
         )
@@ -149,7 +123,6 @@ class DataAccessGateway:
     async def fetch_news(self, query: NewsQuery) -> SourceFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.NEWS,
-            mode=query.mode,
             market=query.market,
             interval=None,
         )
@@ -165,7 +138,6 @@ class DataAccessGateway:
     async def fetch_financial_reports(self, query: FinancialReportQuery) -> SourceFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.FINANCIAL_REPORT,
-            mode=query.mode,
             market=query.market,
             interval=None,
         )

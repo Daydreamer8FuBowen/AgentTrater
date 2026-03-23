@@ -41,12 +41,12 @@ class AppConnectionManager:
             await self._mongo_manager.ping()
             await self._mongo_manager.ensure_indexes()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Mongo startup check failed: %s", exc)
+            logger.warning("Mongo 启动检查失败：%s", exc)
 
         try:
             self._influx_manager.ping()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("Influx startup check failed: %s", exc)
+            logger.warning("Influx 启动检查失败：%s", exc)
 
     async def close(self) -> None:
         try:

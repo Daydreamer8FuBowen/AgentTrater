@@ -7,7 +7,7 @@ import asyncio
 from datetime import datetime, timedelta
 
 from agent_trader.domain.models import BarInterval
-from agent_trader.ingestion.models import FetchMode, KlineQuery, RawEvent
+from agent_trader.ingestion.models import KlineQuery, RawEvent
 from agent_trader.ingestion.normalizers.tushare_normalizer import TuShareNormalizer
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
@@ -40,7 +40,6 @@ async def example_fetch_and_normalize():
                 start_time=start_date,
                 end_time=end_date,
                 interval=BarInterval.D1,
-                mode=FetchMode.HISTORY,
             )
         )
 
