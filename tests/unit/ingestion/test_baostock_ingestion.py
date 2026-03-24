@@ -8,7 +8,13 @@ from unittest.mock import patch
 import pytest
 
 from agent_trader.domain.models import BarInterval
-from agent_trader.ingestion.models import FinancialReportQuery, KlineQuery, SourceFetchResult
+from agent_trader.ingestion.models import (
+    BasicInfoFetchResult,
+    FinancialReportFetchResult,
+    FinancialReportQuery,
+    KlineFetchResult,
+    KlineQuery,
+)
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 
 
@@ -58,11 +64,11 @@ class TestBaoStockSource:
 
             fetch_result = await source.fetch_klines_unified(query)
 
-        assert isinstance(fetch_result, SourceFetchResult)
+        assert isinstance(fetch_result, KlineFetchResult)
         assert fetch_result.source == "baostock"
         assert len(fetch_result.payload) == 1
-        assert fetch_result.payload[0]["symbol"] == "000001.SZ"
-        assert fetch_result.payload[0]["close"] == 10.5
+        assert fetch_result.payload[0].symbol == "000001.SZ"
+        assert fetch_result.payload[0].close == 10.5
         mock_query.assert_called_once()
         mock_logout.assert_called_once_with("anonymous")
 
@@ -84,7 +90,13 @@ class TestBaoStockSource:
         login_result = SimpleNamespace(error_code="0", error_msg="success")
         result = _FakeResultSet(
             fields=["code", "code_name", "ipoDate", "outDate", "type", "status"],
-            rows=[["sh.600000", "浦发银行", "1999-11-10", "", "1", "1"]],
+            rows=[
+                ["sh.600000", "浦发银行", "1999-11-10", "", "1", "1"],
+                ["sh.000001", "上证综指", "1991-07-15", "", "2", "1"],
+                ["sh.110000", "可转债示例", "2020-01-01", "", "4", "1"],
+                ["sh.510010", "ETF示例", "2009-12-15", "", "5", "1"],
+                ["sh.999999", "未知示例", "2000-01-01", "", "9", "1"],
+            ],
         )
 
         with patch("baostock.login", return_value=login_result), patch(
@@ -92,11 +104,17 @@ class TestBaoStockSource:
             return_value=result,
         ), patch("baostock.logout"):
             source = BaoStockSource()
-            events = await source.fetch_basic_info()
+            fetch_result = await source.fetch_basic_info()
 
-        assert len(events) == 1
-        assert events[0].source == "baostock:stock_basic"
-        assert events[0].payload["symbol"] == "600000.SH"
+        assert isinstance(fetch_result, BasicInfoFetchResult)
+        assert len(fetch_result.payload) == 5
+        assert fetch_result.source == "baostock"
+        assert fetch_result.payload[0].symbol == "600000.SH"
+        assert fetch_result.payload[0].security_type == "stock"
+        assert fetch_result.payload[1].security_type == "index"
+        assert fetch_result.payload[2].security_type == "bond"
+        assert fetch_result.payload[3].security_type == "fund"
+        assert fetch_result.payload[4].security_type == "unknown"
 
     @pytest.mark.asyncio
     async def test_fetch_financial_reports_unified(self) -> None:
@@ -129,10 +147,11 @@ class TestBaoStockSource:
 
             fetch_result = await source.fetch_financial_reports_unified(query)
 
-        assert isinstance(fetch_result, SourceFetchResult)
+        assert isinstance(fetch_result, FinancialReportFetchResult)
         assert fetch_result.source == "baostock"
         assert len(fetch_result.payload) == 3
-        assert {item["_report_type"] for item in fetch_result.payload} == {"profit", "forecast"}
+        assert {item.report_type for item in fetch_result.payload} == {"profit", "forecast"}
+        assert all(item.metrics for item in fetch_result.payload)
         assert mock_profit.call_count == 2
         mock_forecast.assert_called_once()
 

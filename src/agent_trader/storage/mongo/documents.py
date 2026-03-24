@@ -330,6 +330,57 @@ class NewsDocument(TimestampedDocument):
     raw_payload: dict[str, Any] = Field(default_factory=dict)
 
 
+class BasicInfoDocument(TimestampedDocument):
+    """标的基础信息快照文档（集合 `basic_infos`）。"""
+
+    collection_name: ClassVar[str] = "basic_infos"
+    primary_key: ClassVar[str] = "symbol"
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "symbol",
+        "name",
+        "industry",
+        "area",
+        "market",
+        "status",
+        "security_type",
+        "primary_source",
+    )
+    json_fields: ClassVar[tuple[str, ...]] = (
+        "source_trace",
+        "conflict_fields",
+        "metadata",
+    )
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "name",
+        "industry",
+        "area",
+        "market",
+        "list_date",
+        "status",
+        "delist_date",
+        "security_type",
+        "primary_source",
+        "source_trace",
+        "conflict_fields",
+        "metadata",
+        "updated_at",
+    )
+
+    symbol: str
+    name: str | None = None
+    industry: str | None = None
+    area: str | None = None
+    market: str | None = None
+    list_date: datetime | None = None
+    status: str | None = None
+    delist_date: datetime | None = None
+    security_type: str | None = None
+    primary_source: str | None = None
+    source_trace: list[str] = Field(default_factory=list)
+    conflict_fields: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class SourcePriorityRouteDocument(TimestampedDocument):
     """数据源路由优先级配置文档。"""
 

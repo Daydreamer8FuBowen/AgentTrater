@@ -5,6 +5,7 @@ from agent_trader.storage.mongo.documents import (
 	AgentDefinitionDocument,
 	AgentReleaseDocument,
 	AgentReleasePointerDocument,
+	BasicInfoDocument,
 	NewsDocument,
 	SkillDefinitionDocument,
 	SkillVersionDocument,
@@ -15,6 +16,7 @@ from agent_trader.storage.mongo.documents import (
 	TaskRunDocument,
 )
 from agent_trader.storage.mongo.repository import (
+	MongoBasicInfoRepository,
 	MongoNewsRepository,
 	MongoSourcePriorityRepository,
 	MongoTaskArtifactRepository,
@@ -27,7 +29,9 @@ __all__ = [
 	"AgentDefinitionDocument",
 	"AgentReleaseDocument",
 	"AgentReleasePointerDocument",
+	"BasicInfoDocument",
 	"MongoConnectionManager",
+	"MongoBasicInfoRepository",
 	"MongoNewsRepository",
 	"MongoTaskArtifactRepository",
 	"MongoTaskEventRepository",

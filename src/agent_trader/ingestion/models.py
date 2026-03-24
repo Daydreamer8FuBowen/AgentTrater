@@ -3,10 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any
-from uuid import UUID, uuid4
+from typing import Any, Generic, TypeVar
 
-from agent_trader.domain.models import BarInterval, ExchangeKind, TriggerKind
+from agent_trader.domain.models import BarInterval, ExchangeKind
 
 
 class DataCapability(str, Enum):
@@ -65,14 +64,118 @@ class FinancialReportQuery:
 
 
 @dataclass(slots=True)
-class SourceFetchResult:
-    """统一结果容器，暂不约束 payload 结构。"""
+class KlineRecord:
+    """统一 K 线记录。"""
 
-    source: str  # 返回数据的来源标识（provider.name）
-    route_key: DataRouteKey  # 本次请求对应的路由键
-    payload: list[dict[str, Any]]  # 未经严格约束的原始或归一化记录列表
-    fetched_at: datetime = field(default_factory=datetime.utcnow)  # 抓取时间（UTC）
-    metadata: dict[str, Any] = field(default_factory=dict)  # 附带元数据（如 count、freq、symbol）
+    symbol: str
+    bar_time: datetime
+    interval: str
+    open: float | None
+    high: float | None
+    low: float | None
+    close: float | None
+    volume: float | None
+    amount: float | None
+    change_pct: float | None
+    turnover_rate: float | None
+    adjusted: bool
+    is_trading: bool | None = None
+
+
+@dataclass(slots=True)
+class BasicInfoRecord:
+    """统一标的基础信息记录。
+
+    字段说明：
+    - symbol: 交易标的代码（例如 '000001.SZ' 或 '600000.SH'），唯一标识。
+    - name: 公司/标的简称。
+    - industry: 行业分类（可选）。
+    - area: 地域/省份（可选）。
+    - market: 交易市场标识（例如 'SSE', 'SZSE'），可为 None 表示未指定或通用。
+    - list_date: 上市日期（datetime），如未知可为 None。
+    - status: 上市状态（例如 'listed'、'delisted'、'suspended' 等）。
+    - delist_date: 退市日期（datetime），如未退市为 None。
+    - security_type: 证券类别（例如 'stock'、'fund'、'bond' 等），可为 None。
+    """
+
+    symbol: str
+    name: str | None
+    industry: str | None
+    area: str | None
+    market: str | None
+    list_date: datetime | None
+    status: str | None
+    delist_date: datetime | None = None
+    security_type: str | None = None
+
+
+@dataclass(slots=True)
+class NewsRecord:
+    """统一新闻记录。"""
+
+    published_at: datetime | None
+    title: str
+    content: str
+    source_channel: str
+    url: str | None
+    symbols: list[str]
+
+
+@dataclass(slots=True)
+class FinancialReportRecord:
+    """统一财报记录。"""
+
+    symbol: str
+    report_type: str
+    report_date: datetime | None
+    published_at: datetime | None
+    report_year: int | None
+    report_quarter: int | None
+    metrics: dict[str, Any]
+
+
+TRecord = TypeVar("TRecord")
+
+
+@dataclass(slots=True)
+class FetchResultBase(Generic[TRecord]):
+    """统一数据抓取结果基类。"""
+
+    source: str
+    route_key: DataRouteKey
+    payload: list[TRecord]
+    data_kind: str = "generic"
+    schema_version: str = "v1"
+    fetched_at: datetime = field(default_factory=datetime.utcnow)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class KlineCapabilityFetchResultBase(FetchResultBase[TRecord], Generic[TRecord]):
+    """绑定到 KLINE capability 路由域的结果基类。"""
+
+
+@dataclass(slots=True)
+class KlineFetchResult(KlineCapabilityFetchResultBase[KlineRecord]):
+    data_kind: str = field(init=False, default="kline")
+
+
+@dataclass(slots=True)
+class BasicInfoFetchResult(KlineCapabilityFetchResultBase[BasicInfoRecord]):
+    data_kind: str = field(init=False, default="basic_info")
+
+
+@dataclass(slots=True)
+class NewsFetchResult(FetchResultBase[NewsRecord]):
+    data_kind: str = field(init=False, default="news")
+
+
+@dataclass(slots=True)
+class FinancialReportFetchResult(FetchResultBase[FinancialReportRecord]):
+    data_kind: str = field(init=False, default="financial_report")
+
+
+DataFetchResult = KlineFetchResult | BasicInfoFetchResult | NewsFetchResult | FinancialReportFetchResult
 
 
 @dataclass(slots=True)
@@ -83,30 +186,3 @@ class SourceCapabilitySpec:
     capability: DataCapability  # 支持的能力类型（KLINE/NEWS/FINANCIAL_REPORT）
     markets: tuple[ExchangeKind, ...] = ()  # 支持的市场集合，空表示不区分
     intervals: tuple[BarInterval, ...] = ()  # 支持的周期集合，仅对 KLINE 有意义
-
-
-@dataclass(slots=True)
-class RawEvent:
-    source: str  # 事件来源标识，例如 provider 名称或消息队列主题
-    payload: dict[str, Any]  # 原始事件负载，结构随来源而异
-    received_at: datetime = field(default_factory=datetime.utcnow)  # 接收时间（UTC）
-    id: UUID = field(default_factory=uuid4)  # 事件唯一标识
-
-
-@dataclass(slots=True)
-class NormalizedEvent:
-    trigger_kind: TriggerKind  # 触发类型，用于路由和处理
-    symbol: str  # 相关标的代码
-    title: str  # 事件/新闻标题
-    content: str  # 事件正文或摘要
-    metadata: dict[str, Any]  # 附加字段（来源、原始 id、置信度等）
-    id: UUID = field(default_factory=uuid4)  # 归一化事件唯一 id
-
-
-@dataclass(slots=True)
-class ResearchTrigger:
-    trigger_kind: TriggerKind  # 触发器类型（例如 'price_spike'）
-    symbol: str  # 相关股票代码
-    summary: str  # 简短的触发器摘要，供快速阅读
-    metadata: dict[str, Any]  # 额外上下文，例如触发阈值或来源
-    id: UUID = field(default_factory=uuid4)  # 唯一标识

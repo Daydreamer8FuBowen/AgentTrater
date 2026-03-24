@@ -22,19 +22,20 @@
 from __future__ import annotations
 
 import os
+from dataclasses import asdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import pytest
 
-from agent_trader.application.services.data_source_gateway import (
+from agent_trader.application.data_access.gateway import (
     DataAccessGateway,
     DataSourceRegistry,
     SourceSelectionAdapter,
 )
 from agent_trader.core.config import Settings, get_settings
 from agent_trader.domain.models import BarInterval, ExchangeKind
-from agent_trader.ingestion.models import DataCapability, DataRouteKey, KlineQuery, SourceFetchResult
+from agent_trader.ingestion.models import DataCapability, DataRouteKey, KlineQuery
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 from agent_trader.storage.connection_manager import MongoConnectionManager
 
@@ -120,11 +121,12 @@ class TestBaoStockDirect:
         assert result.metadata["symbol"] == "000001.SZ"
         assert result.metadata["count"] > 0
 
-        # 验证数据格式
+        # 验证统一数据格式
         bar = result.payload[0]
-        assert "code" in bar
-        assert "date" in bar
-        assert "open" in bar or "close" in bar
+        assert bar.symbol
+        assert bar.bar_time
+        assert hasattr(bar, "open")
+        assert hasattr(bar, "close")
 
     @pytest.mark.asyncio
     async def test_fetch_klines_m5_sse(self):
@@ -244,7 +246,10 @@ class TestTuShareDirect:
             adjusted=True,
         )
 
-        result = await tushare_source.fetch_klines_unified(query)
+        try:
+            result = await tushare_source.fetch_klines_unified(query)
+        except OSError as exc:
+            pytest.skip(f"TuShare token 不可用，跳过实时验证: {exc}")
 
         assert result.source == "tushare"
         assert result.route_key.capability == DataCapability.KLINE
@@ -379,10 +384,10 @@ class TestDataQuality:
         if result.payload:
             # 检查所有记录字段一致
             first_record = result.payload[0]
-            first_keys = set(first_record.keys())
+            first_keys = set(asdict(first_record))
             
             for record in result.payload[1:]:
-                assert set(record.keys()) == first_keys, "记录字段不一致"
+                assert set(asdict(record)) == first_keys, "记录字段不一致"
 
     @pytest.mark.asyncio
     async def test_metadata_accuracy(self):

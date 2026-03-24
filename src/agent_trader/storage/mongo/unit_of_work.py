@@ -9,6 +9,7 @@ from __future__ import annotations
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent_trader.storage.base import (
+    BasicInfoRepository,
     CandleRepository,
     CandidateRepository,
     MemoryRepository,
@@ -18,6 +19,7 @@ from agent_trader.storage.base import (
     UnitOfWork,
 )
 from agent_trader.storage.mongo.repository import (
+    MongoBasicInfoRepository,
     MongoNewsRepository,
     MongoSourcePriorityRepository,
     MongoTaskArtifactRepository,
@@ -70,6 +72,7 @@ class MongoUnitOfWork(UnitOfWork):
         self.task_events = MongoTaskEventRepository(database)
         self.task_artifacts = MongoTaskArtifactRepository(database)
         self.news: NewsRepository = MongoNewsRepository(database)
+        self.basic_infos: BasicInfoRepository = MongoBasicInfoRepository(database)
         self.source_priorities: SourcePriorityRepository = MongoSourcePriorityRepository(database)
         # 尚未接入 Mongo 的仓库（占位）
         self.candidates: CandidateRepository = _UnsupportedCandidateRepository()

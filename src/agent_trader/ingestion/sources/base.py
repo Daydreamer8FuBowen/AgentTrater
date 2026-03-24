@@ -2,23 +2,18 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from agent_trader.domain.models import ExchangeKind
 from agent_trader.ingestion.models import (
+    BasicInfoFetchResult,
     DataRouteKey,
+    FinancialReportFetchResult,
     FinancialReportQuery,
+    KlineFetchResult,
     KlineQuery,
+    NewsFetchResult,
     NewsQuery,
-    RawEvent,
     SourceCapabilitySpec,
-    SourceFetchResult,
 )
-
-
-class SourceAdapter(Protocol):
-    """兼容现有 ingestion 链路的基础协议。"""
-
-    name: str
-
-    async def fetch(self) -> list[RawEvent]: ...
 
 
 class UnifiedDataSource(Protocol):
@@ -30,22 +25,22 @@ class UnifiedDataSource(Protocol):
 
 
 class KlineDataSource(Protocol):
-    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult: ...
+    async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult: ...
 
     # 获取数据源可提供的标的/基础信息（例如股票基本信息），
-    # 返回 RawEvent 列表以保持和现有入库/规范化链路兼容。
-    async def fetch_basic_info(self) -> list[RawEvent]: ...
+    # 该能力和 KlineDataSource 绑定出现，不单独拆分协议。
+    async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult: ...
 
 
 class NewsDataSource(Protocol):
-    async def fetch_news_unified(self, query: NewsQuery) -> SourceFetchResult: ...
+    async def fetch_news_unified(self, query: NewsQuery) -> NewsFetchResult: ...
 
 
 class FinancialReportDataSource(Protocol):
     async def fetch_financial_reports_unified(
         self,
         query: FinancialReportQuery,
-    ) -> SourceFetchResult: ...
+    ) -> FinancialReportFetchResult: ...
 
 
 class DataSourceSelector(Protocol):

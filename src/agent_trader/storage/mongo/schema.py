@@ -15,6 +15,7 @@ from agent_trader.storage.mongo.documents import (
     AgentDefinitionDocument,
     AgentReleaseDocument,
     AgentReleasePointerDocument,
+    BasicInfoDocument,
     MongoDocument,
     NewsDocument,
     SkillDefinitionDocument,
@@ -150,6 +151,14 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
                 IndexModel([("stock_tags", ASCENDING), ("published_at", DESCENDING)]),
                 IndexModel([("concept_tags", ASCENDING), ("published_at", DESCENDING)]),
                 IndexModel([("credibility", DESCENDING), ("published_at", DESCENDING)]),
+            ),
+        ),
+        _document_config(
+            BasicInfoDocument,
+            indexes=(
+                IndexModel([(BasicInfoDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel([("market", ASCENDING), ("updated_at", DESCENDING)]),
+                IndexModel([("primary_source", ASCENDING), ("updated_at", DESCENDING)]),
             ),
         ),
         _document_config(

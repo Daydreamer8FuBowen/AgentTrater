@@ -10,9 +10,11 @@ from datetime import datetime
 from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import UpdateOne
 
 from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.storage.mongo.documents import (
+    BasicInfoDocument,
     NewsDocument,
     SourcePriorityRouteDocument,
     TaskArtifactDocument,
@@ -131,6 +133,45 @@ class MongoNewsRepository:
     async def exists_by_dedupe_key(self, dedupe_key: str) -> bool:
         payload = await self._collection.find_one({"dedupe_key": dedupe_key}, {"_id": 0, "dedupe_key": 1})
         return payload is not None
+
+
+class MongoBasicInfoRepository:
+    """标的基础信息快照仓储实现。"""
+
+    def __init__(self, database: AsyncIOMotorDatabase) -> None:
+        self._collection = database[BasicInfoDocument.collection_name]
+
+    async def upsert_many_by_symbol(self, items: list[BasicInfoDocument]) -> dict[str, int]:
+        if not items:
+            return {
+                "requested": 0,
+                "matched": 0,
+                "modified": 0,
+                "upserted": 0,
+            }
+
+        operations: list[UpdateOne] = []
+        for item in items:
+            payload = item.model_dump()
+            created_at = payload.pop("created_at", datetime.utcnow())
+            operations.append(
+                UpdateOne(
+                    {"symbol": item.symbol},
+                    {
+                        "$set": payload,
+                        "$setOnInsert": {"created_at": created_at},
+                    },
+                    upsert=True,
+                )
+            )
+
+        result = await self._collection.bulk_write(operations, ordered=False)
+        return {
+            "requested": len(items),
+            "matched": result.matched_count,
+            "modified": result.modified_count,
+            "upserted": result.upserted_count,
+        }
 
 
 class MongoSourcePriorityRepository:

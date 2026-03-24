@@ -10,6 +10,7 @@ class InMemoryEventStore:
     task_events: list[Any] = field(default_factory=list)
     task_artifacts: list[Any] = field(default_factory=list)
     news_items: list[Any] = field(default_factory=list)
+    basic_info_items: dict[str, Any] = field(default_factory=dict)
     candidates: list[Any] = field(default_factory=list)
     memories: list[Any] = field(default_factory=list)
     signals: list[Any] = field(default_factory=list)
@@ -84,6 +85,32 @@ class _InMemoryNewsRepository:
         return any(getattr(item, "dedupe_key", None) == dedupe_key for item in self._store.news_items)
 
 
+class _InMemoryBasicInfoRepository:
+    def __init__(self, store: InMemoryEventStore) -> None:
+        self._store = store
+
+    async def upsert_many_by_symbol(self, items: list[Any]) -> dict[str, int]:
+        requested = len(items)
+        matched = 0
+        upserted = 0
+        for item in items:
+            symbol = getattr(item, "symbol", None)
+            if not symbol:
+                continue
+            if symbol in self._store.basic_info_items:
+                matched += 1
+            else:
+                upserted += 1
+            self._store.basic_info_items[symbol] = item
+
+        return {
+            "requested": requested,
+            "matched": matched,
+            "modified": matched,
+            "upserted": upserted,
+        }
+
+
 class _InMemoryCandidateRepository:
     def __init__(self, store: InMemoryEventStore) -> None:
         self._store = store
@@ -131,6 +158,7 @@ class InMemoryUnitOfWork:
         self.task_events = _InMemoryTaskEventRepository(self.store)
         self.task_artifacts = _InMemoryTaskArtifactRepository(self.store)
         self.news = _InMemoryNewsRepository(self.store)
+        self.basic_infos = _InMemoryBasicInfoRepository(self.store)
         self.candidates = _InMemoryCandidateRepository(self.store)
         self.memories = _InMemoryMemoryRepository(self.store)
         self.signals = _InMemorySignalRepository(self.store)

@@ -19,13 +19,17 @@ import baostock as bs
 
 from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
+    BasicInfoFetchResult,
+    BasicInfoRecord,
     DataCapability,
     DataRouteKey,
+    FinancialReportFetchResult,
+    FinancialReportRecord,
     FinancialReportQuery,
+    KlineFetchResult,
+    KlineRecord,
     KlineQuery,
-    RawEvent,
     SourceCapabilitySpec,
-    SourceFetchResult,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,12 +38,7 @@ _T = TypeVar("_T")
 
 _INTERVAL_TO_FREQ: dict[BarInterval, str] = {
     BarInterval.M5: "5",
-    BarInterval.M15: "15",
-    BarInterval.M30: "30",
-    BarInterval.H1: "60",
-    BarInterval.D1: "d",
-    BarInterval.W1: "w",
-    BarInterval.MN1: "m",
+    BarInterval.D1: "d"
 }
 
 _SUPPORTED_KLINE_INTERVALS = tuple(_INTERVAL_TO_FREQ.keys())
@@ -64,6 +63,12 @@ _DATE_RANGE_REPORT_TYPES = {
     "performance_express": "query_performance_express_report",
 }
 _DEFAULT_REPORT_TYPES = tuple(_QUARTERLY_REPORT_TYPES.keys()) + tuple(_DATE_RANGE_REPORT_TYPES.keys())
+_BAOSTOCK_SECURITY_TYPE_MAP: dict[str, str] = {
+    "1": "stock",
+    "2": "index",
+    "4": "bond",
+    "5": "fund",
+}
 
 
 class BaoStockSource:
@@ -83,7 +88,14 @@ class BaoStockSource:
 
     @classmethod
     def from_settings(cls, settings: Any) -> BaoStockSource:
-        """从统一配置系统创建 BaoStockSource 实例。"""
+        """从统一配置系统创建 BaoStockSource 实例。
+
+        Args:
+            settings: 包含 `baostock` 配置属性的配置对象。
+
+        Returns:
+            已用配置初始化的 `BaoStockSource` 实例。
+        """
         baostock_config = settings.baostock
         return cls(
             user_id=baostock_config.user_id,
@@ -92,7 +104,10 @@ class BaoStockSource:
         )
 
     def capabilities(self) -> list[SourceCapabilitySpec]:
-        """声明此数据源支持的能力范围。"""
+        """声明此数据源支持的能力范围。
+
+        返回对外暴露的能力清单，用于路由和能力匹配。
+        """
         return [
             SourceCapabilitySpec(
                 source=self.name,
@@ -107,8 +122,12 @@ class BaoStockSource:
             ),
         ]
 
-    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult:
-        """通过 BaoStock 获取统一格式的 K 线数据。"""
+    async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult:
+        """通过 BaoStock 获取统一格式的 K 线数据。
+
+        接受 `KlineQuery`，调用内部同步查询并将结果封装为 `KlineFetchResult`。
+        若请求的 `interval` 不受支持，会抛出 `ValueError`。
+        """
         freq = _INTERVAL_TO_FREQ.get(query.interval)
         if freq is None:
             raise ValueError(
@@ -132,6 +151,8 @@ class BaoStockSource:
             query.end_time.strftime("%Y-%m-%d"),
             freq,
             "2" if query.adjusted else "3",
+            query.interval,
+            query.adjusted,
         )
 
         logger.info(
@@ -140,7 +161,7 @@ class BaoStockSource:
             query.symbol,
             freq,
         )
-        return SourceFetchResult(
+        return KlineFetchResult(
             source=self.name,
             route_key=route_key,
             payload=payload,
@@ -150,8 +171,12 @@ class BaoStockSource:
     async def fetch_financial_reports_unified(
         self,
         query: FinancialReportQuery,
-    ) -> SourceFetchResult:
-        """通过 BaoStock 获取财务报表与业绩类数据。"""
+    ) -> FinancialReportFetchResult:
+        """通过 BaoStock 获取财务报表与业绩类数据。
+
+        根据 `query.extra` 中的类型选择要查询的报表种类，返回 `FinancialReportFetchResult`。
+        查询在后台线程中运行，避免阻塞事件循环。
+        """
         route_key = DataRouteKey(
             capability=DataCapability.FINANCIAL_REPORT,
             market=query.market,
@@ -173,7 +198,7 @@ class BaoStockSource:
             query.symbol,
             report_types,
         )
-        return SourceFetchResult(
+        return FinancialReportFetchResult(
             source=self.name,
             route_key=route_key,
             payload=payload,
@@ -184,22 +209,33 @@ class BaoStockSource:
             },
         )
 
-    async def fetch_basic_info(self) -> list[RawEvent]:
-        """异步获取股票基础信息。"""
+    async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult:
+        """异步获取股票基础信息，返回统一结果容器。
+
+        在后台线程执行 _query_stock_basic_payload，并对异常做捕获，保证
+        返回值始终为 `BasicInfoFetchResult`（即使 payload 为空）。
+        """
+        route_key = DataRouteKey(
+            capability=DataCapability.KLINE,
+            market=market,
+        )
         try:
             payload = await asyncio.to_thread(self._query_stock_basic_payload)
         except Exception as exc:  # noqa: BLE001
             logger.error("Error fetching BaoStock basic info: %s", exc)
-            return []
+            return BasicInfoFetchResult(
+                source=self.name,
+                route_key=route_key,
+                payload=[],
+                metadata={"dataset": "stock_basic", "count": 0, "error": str(exc)},
+            )
 
-        return [
-            RawEvent(source=f"{self.name}:stock_basic", payload=record)
-            for record in payload
-        ]
-
-    async def fetch(self) -> list[RawEvent]:
-        """默认 fetch 返回股票基础信息。"""
-        return await self.fetch_basic_info()
+        return BasicInfoFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=payload,
+            metadata={"dataset": "stock_basic", "count": len(payload)},
+        )
 
     def _query_kline_payload(
         self,
@@ -209,8 +245,26 @@ class BaoStockSource:
         end_date: str,
         frequency: str,
         adjustflag: str,
-    ) -> list[dict[str, Any]]:
-        def operation() -> list[dict[str, Any]]:
+        interval: BarInterval,
+        adjusted: bool,
+    ) -> list[KlineRecord]:
+        """在同步上下文中调用 BaoStock 的历史行情接口并返回标准化的 K 线记录列表。
+
+        Args:
+            code: BaoStock 风格的股票代码（例如 `sh.600000`）。
+            fields: 查询字段字符串。
+            start_date: 开始日期，格式 `YYYY-MM-DD`。
+            end_date: 结束日期，格式 `YYYY-MM-DD`。
+            frequency: BaoStock 使用的频率字符串（如 "5","d"）。
+            adjustflag: 复权标志（BaoStock 要求的编码）。
+            interval: 我们内部使用的 `BarInterval`，用于标准化记录。
+            adjusted: 是否已复权，用于结果标注。
+
+        Returns:
+            标准化后的 `KlineRecord` 列表。
+        """
+
+        def operation() -> list[KlineRecord]:
             result = bs.query_history_k_data_plus(
                 code,
                 fields,
@@ -219,24 +273,24 @@ class BaoStockSource:
                 frequency=frequency,
                 adjustflag=adjustflag,
             )
-            payload = self._rows_from_result(result)
-            for record in payload:
-                record["symbol"] = _to_canonical_symbol(str(record.get("code", code)))
-                record["bar_time"] = _parse_bar_time(record)
-                record["_freq"] = frequency
-            return payload
+            rows = self._rows_from_result(result)
+            return [
+                _normalize_baostock_kline_record(record, interval, adjusted, code)
+                for record in rows
+            ]
 
         return self._run_with_session(operation)
 
-    def _query_stock_basic_payload(self) -> list[dict[str, Any]]:
-        def operation() -> list[dict[str, Any]]:
+    def _query_stock_basic_payload(self) -> list[BasicInfoRecord]:
+        """在同步上下文中调用 BaoStock 的股票基础信息查询并返回标准化记录。
+
+        返回一个 `BasicInfoRecord` 列表，用于后续封装到 `BasicInfoFetchResult`。
+        """
+
+        def operation() -> list[BasicInfoRecord]:
             result = bs.query_stock_basic()
-            payload = self._rows_from_result(result)
-            for record in payload:
-                code = str(record.get("code", ""))
-                if code:
-                    record["symbol"] = _to_canonical_symbol(code)
-            return payload
+            rows = self._rows_from_result(result)
+            return [_normalize_baostock_basic_info_record(record) for record in rows]
 
         return self._run_with_session(operation)
 
@@ -246,20 +300,29 @@ class BaoStockSource:
         report_types: tuple[str, ...],
         start_time: datetime | None,
         end_time: datetime | None,
-    ) -> list[dict[str, Any]]:
-        def operation() -> list[dict[str, Any]]:
-            payload: list[dict[str, Any]] = []
+    ) -> list[FinancialReportRecord]:
+        """在同步上下文中查询指定代码及报表类型的财务数据并标准化为记录列表。
+
+        支持按季度类型和按时间范围的报表方法。
+        """
+
+        def operation() -> list[FinancialReportRecord]:
+            payload: list[FinancialReportRecord] = []
             for report_type in report_types:
                 if report_type in _QUARTERLY_REPORT_TYPES:
                     method = getattr(bs, _QUARTERLY_REPORT_TYPES[report_type])
                     for year, quarter in _iter_quarters(start_time, end_time):
                         result = method(code, year=year, quarter=quarter)
                         for record in self._rows_from_result(result):
-                            record["symbol"] = _to_canonical_symbol(str(record.get("code", code)))
-                            record["_report_type"] = report_type
-                            record["_report_year"] = year
-                            record["_report_quarter"] = quarter
-                            payload.append(record)
+                            payload.append(
+                                _normalize_baostock_financial_record(
+                                    record,
+                                    symbol_hint=code,
+                                    report_type=report_type,
+                                    report_year=year,
+                                    report_quarter=quarter,
+                                )
+                            )
                     continue
 
                 method = getattr(bs, _DATE_RANGE_REPORT_TYPES[report_type])
@@ -269,14 +332,24 @@ class BaoStockSource:
                     end_date=_format_date(end_time),
                 )
                 for record in self._rows_from_result(result):
-                    record["symbol"] = _to_canonical_symbol(str(record.get("code", code)))
-                    record["_report_type"] = report_type
-                    payload.append(record)
+                    payload.append(
+                        _normalize_baostock_financial_record(
+                            record,
+                            symbol_hint=code,
+                            report_type=report_type,
+                        )
+                    )
             return payload
 
         return self._run_with_session(operation)
 
     def _run_with_session(self, operation: Callable[[], _T]) -> _T:
+        """使用 baostock 的登录会话执行传入的同步操作。
+
+        负责登录、执行 `operation`，以及在 finally 中尝试登出以释放会话。
+        若登录失败，抛出 `RuntimeError`。
+        """
+
         login_result = bs.login(self.user_id, self.password, self.options)
         if getattr(login_result, "error_code", "0") != "0":
             raise RuntimeError(f"BaoStock login failed: {login_result.error_msg}")
@@ -290,6 +363,15 @@ class BaoStockSource:
                 logger.warning("BaoStock logout failed for user=%s", self.user_id)
 
     def _rows_from_result(self, result: Any) -> list[dict[str, Any]]:
+        """将 baostock 查询结果对象转换为字典列表并做值类型强转。
+
+        Args:
+            result: baostock 返回的查询结果对象。
+
+        Returns:
+            一个由字段-值映射字典组成的列表，值已通过 `_coerce_record_values` 转换。
+        """
+
         if getattr(result, "error_code", "0") != "0":
             raise RuntimeError(f"BaoStock query failed: {result.error_msg}")
 
@@ -303,6 +385,15 @@ class BaoStockSource:
 
 
 def _to_baostock_symbol(symbol: str, market: ExchangeKind | None = None) -> str:
+    """将外部符号形式归一化为 BaoStock 要求的代码格式。
+
+    支持的输入形式包括 `sh.600000`, `600000.SH`, `600000` 等，
+    并可根据传入的 `market` 推断前缀。
+
+    Raises:
+        ValueError: 无法识别或归一化输入符号时抛出。
+    """
+
     text = symbol.strip()
     lower = text.lower()
     if lower.startswith(("sh.", "sz.")):
@@ -324,6 +415,12 @@ def _to_baostock_symbol(symbol: str, market: ExchangeKind | None = None) -> str:
 
 
 def _to_canonical_symbol(symbol: str) -> str:
+    """将 BaoStock 风格的代码或类似形式转换为标准展示形式。
+
+    例如：`sh.600000` -> `600000.SH`，`sz.000001` -> `000001.SZ`。
+    对于不匹配的输入，原样返回。
+    """
+
     text = symbol.strip().lower()
     if text.startswith("sh."):
         return f"{text[3:]}.SH"
@@ -333,6 +430,15 @@ def _to_canonical_symbol(symbol: str) -> str:
 
 
 def _parse_bar_time(record: dict[str, Any]) -> datetime:
+    """从 baostock 的 K 线记录解析出时间戳。
+
+    优先解析 `time` 字段（可能包含完整的时间字符串），
+    否则回退到 `date` 字段并按日解析。
+
+    Raises:
+        ValueError: 当既没有时间也没有日期信息时抛出。
+    """
+
     time_value = record.get("time")
     if isinstance(time_value, str) and time_value.strip():
         digits = "".join(ch for ch in time_value if ch.isdigit())
@@ -345,7 +451,116 @@ def _parse_bar_time(record: dict[str, Any]) -> datetime:
     return datetime.strptime(date_value, "%Y-%m-%d")
 
 
+def _normalize_baostock_kline_record(
+    record: dict[str, Any],
+    interval: BarInterval,
+    adjusted: bool,
+    symbol_hint: str,
+) -> KlineRecord:
+    """将单条 baostock 原始 K 线字典标准化为 `KlineRecord`。
+
+    Args:
+        record: 原始字典形式的行数据。
+        interval: 目标 `BarInterval`，用于填充 `interval` 字段。
+        adjusted: 标记该记录是否为复权数据。
+        symbol_hint: 当记录中缺少 code 字段时使用的符号提示。
+    """
+
+    return KlineRecord(
+        symbol=_to_canonical_symbol(str(record.get("code", symbol_hint))),
+        bar_time=_parse_bar_time(record),
+        interval=interval.value,
+        open=_to_float(record.get("open")),
+        high=_to_float(record.get("high")),
+        low=_to_float(record.get("low")),
+        close=_to_float(record.get("close")),
+        volume=_to_float(record.get("volume")),
+        amount=_to_float(record.get("amount")),
+        change_pct=_to_float(record.get("pctChg")),
+        turnover_rate=_to_float(record.get("turn")),
+        is_trading=_to_bool(record.get("tradestatus")),
+        adjusted=adjusted,
+    )
+
+
+def _normalize_baostock_basic_info_record(record: dict[str, Any]) -> BasicInfoRecord:
+    """将 baostock 返回的股票基础信息行转换为 `BasicInfoRecord`。
+
+    该转换会尝试解析代码、名称、上市日期与交易所信息，并统一符号格式。
+    """
+
+    code = str(record.get("code", ""))
+    return BasicInfoRecord(
+        symbol=_to_canonical_symbol(code) if code else "",
+        name=record.get("code_name", record.get("name")),
+        industry=None,
+        area=None,
+        market=_infer_market_from_symbol(code),
+        list_date=_parse_optional_date(record.get("ipoDate")),
+        status=record.get("status"),
+        delist_date=_parse_optional_date(record.get("outDate")),
+        security_type=_normalize_baostock_security_type(record.get("type")),
+    )
+
+
+def _normalize_baostock_security_type(value: Any) -> str | None:
+    """将 BaoStock `type` 原始编码映射为统一 `security_type` 符号值。"""
+
+    if value in (None, ""):
+        return None
+
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+    return _BAOSTOCK_SECURITY_TYPE_MAP.get(normalized, "unknown")
+
+
+def _normalize_baostock_financial_record(
+    record: dict[str, Any],
+    *,
+    symbol_hint: str,
+    report_type: str,
+    report_year: int | None = None,
+    report_quarter: int | None = None,
+) -> FinancialReportRecord:
+    """将 baostock 返回的单条财务/业绩记录转换为 `FinancialReportRecord`。
+
+    会提取发布日期、统计日期，并将其余指标放到 `metrics` 字段中。
+    """
+
+    published_at = _parse_optional_date(record.get("pubDate") or record.get("performanceExpPubDate"))
+    report_date = _parse_optional_date(record.get("statDate") or record.get("performanceExpStatDate"))
+    metrics = {
+        key: value
+        for key, value in record.items()
+        if key not in {
+            "code",
+            "pubDate",
+            "statDate",
+            "performanceExpPubDate",
+            "performanceExpStatDate",
+        }
+    }
+    return FinancialReportRecord(
+        symbol=_to_canonical_symbol(str(record.get("code", symbol_hint))),
+        report_type=report_type,
+        report_date=report_date,
+        published_at=published_at,
+        report_year=report_year,
+        report_quarter=report_quarter,
+        metrics=metrics,
+    )
+
+
 def _coerce_record_values(record: dict[str, Any]) -> dict[str, Any]:
+    """对从 baostock 得到的字符串值进行类型强转。
+
+    - 对于包含小数点或科学计数法的字符串，尝试转换为 `float`。
+    - 否则尝试转换为 `int`。
+    - 对于空字符串或特定跳过字段，保留原值或置为 `None`。
+    返回转换后的字典副本。
+    """
+
     coerced: dict[str, Any] = {}
     for key, value in record.items():
         if key in _VALUE_SKIP_FIELDS or value in (None, ""):
@@ -372,7 +587,68 @@ def _coerce_record_values(record: dict[str, Any]) -> dict[str, Any]:
     return coerced
 
 
+def _parse_optional_date(value: Any) -> datetime | None:
+    """解析可选日期字符串为 `datetime.date` 风格的 `datetime` 对象。
+
+    如果输入为空或不可解析，返回 `None`。
+    支持格式为 `%Y-%m-%d`。
+    """
+
+    if value in (None, ""):
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+    return datetime.strptime(text, "%Y-%m-%d")
+
+
+def _infer_market_from_symbol(symbol: str) -> str | None:
+    """从符号推断市场前缀（'sh' / 'sz'），无法识别时返回 None。"""
+
+    text = symbol.strip().lower()
+    if text.startswith("sh."):
+        return "sh"
+    if text.startswith("sz."):
+        return "sz"
+    return None
+
+
+def _to_float(value: Any) -> float | None:
+    """将可能为字符串或数值的输入转换为 `float`，空值返回 `None`。"""
+
+    if value in (None, ""):
+        return None
+    return float(value)
+
+
+def _to_bool(value: Any) -> bool | None:
+    """将常见的字符串/数字表示转换为布尔值。
+
+    - 接受 `1/0`, `true/false`, `yes/no` 等形式（不区分大小写）。
+    - 对于无法识别的输入返回 `None`。
+    """
+
+    if value in (None, ""):
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "y"}:
+        return True
+    if text in {"0", "false", "no", "n"}:
+        return False
+    return None
+
+
 def _resolve_report_types(extra: dict[str, Any]) -> tuple[str, ...]:
+    """从 `extra` 字段解析用户请求的财报类型列表，返回合法的类型元组。
+
+    若未指定则返回默认全部可用类型；若包含未知类型则抛出 `ValueError`。
+    """
+
     requested = extra.get("report_types") if extra else None
     if requested is None:
         return _DEFAULT_REPORT_TYPES
@@ -392,6 +668,12 @@ def _iter_quarters(
     start_time: datetime | None,
     end_time: datetime | None,
 ) -> list[tuple[int, int]]:
+    """在给定的开始/结束时间区间内生成 (year, quarter) 的序列。
+
+    若任一端为 None，则以另一端或当前时间作为参考点。
+    返回值为按时间顺序增大的 (year, quarter) 元组列表。
+    """
+
     start = start_time or end_time or datetime.utcnow()
     end = end_time or start
     if start > end:
@@ -412,10 +694,14 @@ def _iter_quarters(
 
 
 def _quarter_of(value: datetime) -> int:
+    """计算 datetime 所在的季度（1-4）。"""
+
     return (value.month - 1) // 3 + 1
 
 
 def _format_date(value: datetime | None) -> str | None:
+    """将可选的 datetime 格式化为 `YYYY-MM-DD` 字符串，空值返回 None。"""
+
     if value is None:
         return None
     return value.strftime("%Y-%m-%d")

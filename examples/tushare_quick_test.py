@@ -80,8 +80,8 @@ async def main():
         # 获取其他数据类型
         print("🔄 步骤 4: 获取其他数据类型...")
 
-        basic_info = await source.fetch_basic_info()
-        print(f"✓ 股票基本信息: {len(basic_info)} 条")
+        basic_result = await source.fetch_basic_info()
+        print(f"✓ 股票基本信息: {len(basic_result.payload)} 条")
 
         daily_basic = await source.fetch_daily_basic()
         print(f"✓ 每日基础面: {len(daily_basic)} 条")

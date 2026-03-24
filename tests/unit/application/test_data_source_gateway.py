@@ -11,17 +11,20 @@ from datetime import datetime
 
 import pytest
 
-from agent_trader.application.services.data_source_gateway import (
+from agent_trader.application.data_access.gateway import (
     DataAccessGateway,
     DataSourceRegistry,
     SourceSelectionAdapter,
 )
 from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
+    BasicInfoFetchResult,
+    BasicInfoRecord,
     DataCapability,
     DataRouteKey,
+    KlineFetchResult,
+    KlineRecord,
     KlineQuery,
-    SourceFetchResult,
 )
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 
@@ -71,8 +74,11 @@ class _FailingProvider:
 
     name = "primary"
 
-    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult:  # noqa: ARG002
+    async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult:  # noqa: ARG002
         raise RuntimeError("source down")  # 让 SourceSelectionAdapter 捕获后尝试下一个源
+
+    async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult:  # noqa: ARG002
+        raise RuntimeError("source down")
 
 
 class _SuccessProvider:
@@ -80,14 +86,55 @@ class _SuccessProvider:
 
     name = "fallback"
 
-    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult:
+    async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
             market=query.market,
             interval=query.interval,
         )
         # payload 仅含 symbol 占位，足以让断言区分来源
-        return SourceFetchResult(source=self.name, route_key=route_key, payload=[{"symbol": query.symbol}])
+        return KlineFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=[
+                KlineRecord(
+                    symbol=query.symbol,
+                    bar_time=query.start_time,
+                    interval=query.interval.value,
+                    open=None,
+                    high=None,
+                    low=None,
+                    close=None,
+                    volume=None,
+                    amount=None,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=query.adjusted,
+                )
+            ],
+        )
+
+    async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult:
+        route_key = DataRouteKey(
+            capability=DataCapability.KLINE,
+            market=market,
+            interval=None,
+        )
+        return BasicInfoFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=[
+                BasicInfoRecord(
+                    symbol="600000.SH",
+                    name="Fallback Co",
+                    industry=None,
+                    area=None,
+                    market="sh",
+                    list_date=None,
+                    status="1",
+                )
+            ],
+        )
 
 
 class _PrimarySuccessProvider:
@@ -95,13 +142,60 @@ class _PrimarySuccessProvider:
 
     name = "primary"
 
-    async def fetch_klines_unified(self, query: KlineQuery) -> SourceFetchResult:
+    async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
             market=query.market,
             interval=query.interval,
         )
-        return SourceFetchResult(source=self.name, route_key=route_key, payload=[{"symbol": query.symbol}])
+        return KlineFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=[
+                KlineRecord(
+                    symbol=query.symbol,
+                    bar_time=query.start_time,
+                    interval=query.interval.value,
+                    open=None,
+                    high=None,
+                    low=None,
+                    close=None,
+                    volume=None,
+                    amount=None,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=query.adjusted,
+                )
+            ],
+        )
+
+    async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult:
+        route_key = DataRouteKey(
+            capability=DataCapability.KLINE,
+            market=market,
+            interval=None,
+        )
+        return BasicInfoFetchResult(
+            source=self.name,
+            route_key=route_key,
+            payload=[
+                BasicInfoRecord(
+                    symbol="600000.SH",
+                    name="Primary Co",
+                    industry=None,
+                    area=None,
+                    market="sh",
+                    list_date=None,
+                    status="1",
+                )
+            ],
+        )
+
+
+class _NoBasicInfoProvider:
+    """模拟不支持 basic_info 能力的数据源。"""
+
+    name = "no_basic"
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +283,72 @@ async def test_gateway_primary_success_keeps_priority_order() -> None:
     updated = await priority_repo.get(route_key)
     assert updated is not None
     assert updated.priorities == ["primary", "fallback"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_fetch_basic_info_fallback_and_promote_success_source() -> None:
+    """basic_info 路由应与其它能力一样支持回退与优先级重排。"""
+    route_key = DataRouteKey(
+        capability=DataCapability.KLINE,
+        market=ExchangeKind.SSE,
+        interval=None,
+    )
+
+    priority_repo = _InMemoryPriorityRepository()
+    await priority_repo.upsert(route_key, priorities=["primary", "fallback"])
+
+    registry = DataSourceRegistry()
+    registry.register(_FailingProvider())
+    registry.register(_SuccessProvider())
+
+    selector = SourceSelectionAdapter(
+        registry=registry,
+        priority_repository=priority_repo,
+    )
+    gateway = DataAccessGateway(selector)
+
+    result = await gateway.fetch_basic_info(market=ExchangeKind.SSE)
+
+    assert result.source == "fallback"
+    assert result.data_kind == "basic_info"
+    assert result.payload[0].symbol == "600000.SH"
+    updated = await priority_repo.get(route_key)
+    assert updated is not None
+    assert updated.priorities == ["fallback", "primary"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_fetch_basic_info_from_all_sources_with_error_isolation() -> None:
+    """全源拉取应遵循优先顺序，并隔离单源失败。"""
+    route_key = DataRouteKey(
+        capability=DataCapability.KLINE,
+        market=ExchangeKind.SSE,
+        interval=None,
+    )
+
+    priority_repo = _InMemoryPriorityRepository()
+    await priority_repo.upsert(route_key, priorities=["primary", "fallback"]) 
+
+    registry = DataSourceRegistry()
+    registry.register(_PrimarySuccessProvider())
+    registry.register(_SuccessProvider())
+    registry.register(_NoBasicInfoProvider())
+
+    selector = SourceSelectionAdapter(
+        registry=registry,
+        priority_repository=priority_repo,
+    )
+    gateway = DataAccessGateway(selector)
+
+    outcomes = await gateway.fetch_basic_info_from_all_sources(market=ExchangeKind.SSE)
+
+    assert [item.source_name for item in outcomes] == ["primary", "fallback", "no_basic"]
+    assert outcomes[0].result is not None
+    assert outcomes[0].result.source == "primary"
+    assert outcomes[1].result is not None
+    assert outcomes[1].result.source == "fallback"
+    assert outcomes[2].result is None
+    assert outcomes[2].error == "missing basic_info ability"
 
 
 # ---------------------------------------------------------------------------
@@ -298,3 +458,34 @@ async def test_gateway_fallback_to_real_provider_and_reorder_priority() -> None:
     updated = await priority_repo.get(route_key)
     assert updated is not None
     assert updated.priorities == ["baostock", "primary"]
+
+
+@pytest.mark.asyncio
+async def test_gateway_register_real_provider_and_fetch_basic_info() -> None:
+    """将真实 BaoStockSource 注册到网关，通过 basic_info 统一入口获取标准化标的信息。"""
+    route_key = DataRouteKey(
+        capability=DataCapability.KLINE,
+        market=ExchangeKind.SSE,
+        interval=None,
+    )
+
+    priority_repo = _InMemoryPriorityRepository()
+    await priority_repo.upsert(route_key, priorities=["baostock"])
+
+    registry = DataSourceRegistry()
+    registry.register(BaoStockSource())
+
+    selector = SourceSelectionAdapter(
+        registry=registry,
+        priority_repository=priority_repo,
+    )
+    gateway = DataAccessGateway(selector)
+
+    result = await gateway.fetch_basic_info(market=ExchangeKind.SSE)
+
+    assert result.source == "baostock"
+    assert result.route_key == route_key
+    assert result.data_kind == "basic_info"
+    assert len(result.payload) > 0
+    assert result.payload[0].symbol
+    assert result.metadata.get("count") == len(result.payload)

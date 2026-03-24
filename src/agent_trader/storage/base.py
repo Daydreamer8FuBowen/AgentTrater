@@ -37,6 +37,12 @@ class NewsRepository(Protocol):
     async def exists_by_dedupe_key(self, dedupe_key: str) -> bool: ...
 
 
+class BasicInfoRepository(Protocol):
+    """标的基础信息快照仓储接口。"""
+
+    async def upsert_many_by_symbol(self, items: Sequence[Any]) -> dict[str, int]: ...
+
+
 class CandidateRepository(Protocol):
     """候选池查询与写入接口。"""
 
@@ -85,6 +91,7 @@ class UnitOfWork(Protocol):
     task_events: TaskEventRepository
     task_artifacts: TaskArtifactRepository
     news: NewsRepository
+    basic_infos: BasicInfoRepository
     candidates: CandidateRepository
     memories: MemoryRepository
     signals: SignalRepository

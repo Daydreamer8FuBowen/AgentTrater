@@ -1,11 +1,16 @@
 from fastapi.testclient import TestClient
 
 from agent_trader.api.main import app
-from agent_trader.application.services.data_source_gateway import DataSourceRegistry
+from agent_trader.application.data_access.gateway import DataSourceRegistry
 from agent_trader.ingestion.models import DataRouteKey
 
 
-def test_source_registry_is_initialized_on_startup() -> None:
+async def _noop_symbol_bootstrap(*args, **kwargs) -> None:  # noqa: ARG001
+    return None
+
+
+def test_source_registry_is_initialized_on_startup(monkeypatch) -> None:
+    monkeypatch.setattr("agent_trader.api.main._bootstrap_basic_info_symbols_if_empty", _noop_symbol_bootstrap)
     with TestClient(app) as client:
         response = client.get("/health")
         assert response.status_code == 200
@@ -23,8 +28,14 @@ def test_source_registry_is_initialized_on_startup() -> None:
 
         routes = client.portal.call(_load_routes)
         assert routes
-        assert all(route["enabled"] is True for route in routes)
         assert all(route["priorities"] for route in routes)
+        bootstrapped_routes = [
+            route
+            for route in routes
+            if route.get("metadata", {}).get("bootstrap") is True
+        ]
+        assert bootstrapped_routes
+        assert all(route["enabled"] is True for route in bootstrapped_routes)
         assert all(
             route["priorities"][0] == "baostock"
             for route in routes
@@ -32,7 +43,8 @@ def test_source_registry_is_initialized_on_startup() -> None:
         )
 
 
-def test_bootstrap_only_inserts_missing_routes() -> None:
+def test_bootstrap_only_inserts_missing_routes(monkeypatch) -> None:
+    monkeypatch.setattr("agent_trader.api.main._bootstrap_basic_info_symbols_if_empty", _noop_symbol_bootstrap)
     with TestClient(app) as client:
         response = client.get("/health")
         assert response.status_code == 200
@@ -99,3 +111,74 @@ def test_bootstrap_only_inserts_missing_routes() -> None:
         assert added is not None
         assert added["enabled"] is True
         assert added["metadata"].get("bootstrap") is True
+
+
+def test_basic_info_symbol_bootstrap_only_runs_when_collection_empty(monkeypatch) -> None:
+    from agent_trader.api import main as main_mod
+    from agent_trader.storage.mongo.documents import BasicInfoDocument
+
+    original_bootstrap = main_mod._bootstrap_basic_info_symbols_if_empty
+    monkeypatch.setattr(main_mod, "_bootstrap_basic_info_symbols_if_empty", _noop_symbol_bootstrap)
+
+    temp_collection = "basic_infos_test_bootstrap"
+    monkeypatch.setattr(BasicInfoDocument, "collection_name", temp_collection)
+
+    class _FakeService:
+        def __init__(self, database):
+            self._database = database
+            self.calls = 0
+
+        async def sync_basic_info_snapshot(self, market=None):  # noqa: ARG002
+            self.calls += 1
+            await self._database[temp_collection].insert_one(
+                {
+                    "symbol": "600000.SH",
+                    "name": "Bootstrap Co",
+                    "market": "sh",
+                    "source_trace": ["bootstrap"],
+                    "conflict_fields": [],
+                    "metadata": {"bootstrap": True},
+                }
+            )
+            return {
+                "requested_sources": 1,
+                "input_count": 1,
+                "dedup_count": 1,
+                "persisted": {"requested": 1, "matched": 0, "modified": 0, "upserted": 1},
+                "failed_sources": [],
+            }
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        assert response.status_code == 200
+
+        database = app.state.mongo_manager.database
+        service = _FakeService(database)
+
+        monkeypatch.setattr(main_mod, "_bootstrap_basic_info_symbols_if_empty", original_bootstrap)
+
+        monkeypatch.setattr(
+            main_mod,
+            "_build_basic_info_aggregation_service",
+            lambda database, registry: service,  # noqa: ARG005
+        )
+
+        async def _exercise() -> tuple[int, int]:
+            from agent_trader.api.main import _build_source_registry, _bootstrap_basic_info_symbols_if_empty
+
+            await database[temp_collection].delete_many({})
+            try:
+                registry = _build_source_registry()
+                await _bootstrap_basic_info_symbols_if_empty(database, registry)
+                first_count = await database[temp_collection].count_documents({})
+                await _bootstrap_basic_info_symbols_if_empty(database, registry)
+                second_count = await database[temp_collection].count_documents({})
+                return first_count, second_count
+            finally:
+                await database[temp_collection].delete_many({})
+
+        first_count, second_count = client.portal.call(_exercise)
+
+        assert service.calls == 1
+        assert first_count == 1
+        assert second_count == 1

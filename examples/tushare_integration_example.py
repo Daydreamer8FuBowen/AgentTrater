@@ -58,11 +58,12 @@ async def example_fetch_and_normalize():
 
         # ==================== 获取股票基本信息 ====================
         print("📋 获取所有 A 股基本信息...")
-        basic_infos = await source.fetch_basic_info()
-        print(f"✓ 获取了 {len(basic_infos)} 条股票基本信息\n")
+        basic_result = await source.fetch_basic_info()
+        print(f"✓ 获取了 {len(basic_result.payload)} 条股票基本信息\n")
 
         # 规范化基本信息（仅显示前 2 条）
-        for raw_event in basic_infos[:2]:
+        for record in basic_result.payload[:2]:
+            raw_event = RawEvent(source=f"{source.name}:stock_basic", payload=record)
             normalized = await normalizer.normalize(raw_event)
             if normalized:
                 trigger = await normalizer.to_trigger(normalized)

@@ -5,14 +5,12 @@ from collections.abc import AsyncIterator
 from fastapi import Depends, Request
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from agent_trader.agents.graphs.trigger_router import TriggerRouterGraph
-from agent_trader.application.services.data_source_gateway import (
+from agent_trader.application.data_access.gateway import (
     DataAccessGateway,
     DataSourceRegistry,
     SourceSelectionAdapter,
 )
-from agent_trader.application.services.table_admin_service import TableAdminService
-from agent_trader.application.services.trigger_service import TriggerService
+from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
 from agent_trader.core.config import Settings, get_settings
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
@@ -39,12 +37,6 @@ async def get_uow(
     database: AsyncIOMotorDatabase = Depends(get_mongo_database),
 ) -> AsyncIterator[UnitOfWork]:
     yield MongoUnitOfWork(database)
-
-
-async def get_table_admin_service(
-    database: AsyncIOMotorDatabase = Depends(get_mongo_database),
-) -> AsyncIterator[TableAdminService]:
-    yield TableAdminService(database)
 
 
 def get_tushare_source(settings: Settings = Depends(get_settings)) -> TuShareSource:
@@ -95,9 +87,11 @@ def get_data_access_gateway(
     return DataAccessGateway(selector)
 
 
-def get_trigger_service(
-    settings: Settings = Depends(get_settings),
-    unit_of_work: UnitOfWork = Depends(get_uow),
-) -> TriggerService:
-    del settings
-    return TriggerService(unit_of_work=unit_of_work, router_graph=TriggerRouterGraph())
+def get_basic_info_aggregation_service(
+    gateway: DataAccessGateway = Depends(get_data_access_gateway),
+    database: AsyncIOMotorDatabase = Depends(get_mongo_database),
+) -> BasicInfoAggregationService:
+    return BasicInfoAggregationService(
+        gateway=gateway,
+        uow_factory=lambda: MongoUnitOfWork(database),
+    )
