@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+# InMemoryEventStore 是一个“测试用内存数据库容器”，用于在不连真实 Mongo/Influx 的情况下，临时保存各类仓储数据。
 
 @dataclass
 class InMemoryEventStore:
@@ -12,9 +13,12 @@ class InMemoryEventStore:
     news_items: list[Any] = field(default_factory=list)
     basic_info_items: dict[str, Any] = field(default_factory=dict)
     candidates: list[Any] = field(default_factory=list)
+    positions: list[Any] = field(default_factory=list)
     memories: list[Any] = field(default_factory=list)
     signals: list[Any] = field(default_factory=list)
     candles: list[Any] = field(default_factory=list)
+    kline_sync_states: dict[str, Any] = field(default_factory=dict)  # key: "symbol:market:interval"
+    backfill_progress: dict[str, Any] = field(default_factory=dict)  # key: "market:interval:tier"
     commit_count: int = 0
     rollback_count: int = 0
 
@@ -110,6 +114,21 @@ class _InMemoryBasicInfoRepository:
             "upserted": upserted,
         }
 
+    async def list_symbols_by_market(self, market: str) -> list[str]:
+        return [
+            sym
+            for sym, item in self._store.basic_info_items.items()
+            if getattr(item, "market", None) == market
+            and getattr(item, "status", None) not in {"delisted", "0", 0}
+            and (
+                market not in {"sh", "sz"}
+                or (
+                    getattr(item, "security_type", None) == "stock"
+                    and "ST" not in str(getattr(item, "name", "") or "")
+                )
+            )
+        ]
+
 
 class _InMemoryCandidateRepository:
     def __init__(self, store: InMemoryEventStore) -> None:
@@ -121,6 +140,18 @@ class _InMemoryCandidateRepository:
 
     async def list_active(self) -> list[Any]:
         return list(self._store.candidates)
+
+
+class _InMemoryPositionRepository:
+    def __init__(self, store: InMemoryEventStore) -> None:
+        self._store = store
+
+    async def upsert(self, position: Any) -> Any:
+        self._store.positions.append(position)
+        return position
+
+    async def list_active(self) -> list[Any]:
+        return list(self._store.positions)
 
 
 class _InMemoryMemoryRepository:
@@ -151,6 +182,64 @@ class _InMemoryCandleRepository:
         self._store.candles.extend(candles)
 
 
+class _InMemoryKlineSyncStateRepository:
+    def __init__(self, store: InMemoryEventStore) -> None:
+        self._store = store
+
+    async def get_or_create(self, symbol: str, market: str, interval: str) -> Any:
+        key = f"{symbol}:{market}:{interval}"
+        if key not in self._store.kline_sync_states:
+            self._store.kline_sync_states[key] = {
+                "state_id": key,
+                "symbol": symbol,
+                "market": market,
+                "interval": interval,
+                "last_bar_time": None,
+                "last_fetched_at": None,
+                "lag_seconds": 0.0,
+                "consecutive_failures": 0,
+                "status": "ok",
+            }
+        return type("SyncState", (), self._store.kline_sync_states[key])()
+
+    async def update(self, state: Any) -> None:
+        key = f"{state.symbol}:{state.market}:{state.interval}"
+        self._store.kline_sync_states[key] = {
+            "state_id": getattr(state, "state_id", key),
+            "symbol": state.symbol,
+            "market": state.market,
+            "interval": state.interval,
+            "last_bar_time": getattr(state, "last_bar_time", None),
+            "last_fetched_at": getattr(state, "last_fetched_at", None),
+            "lag_seconds": getattr(state, "lag_seconds", 0.0),
+            "consecutive_failures": getattr(state, "consecutive_failures", 0),
+            "status": getattr(state, "status", "ok"),
+        }
+
+
+class _InMemoryBackfillProgressRepository:
+    def __init__(self, store: InMemoryEventStore) -> None:
+        self._store = store
+
+    async def get(self, market: str, interval: str, tier: str) -> Any | None:
+        key = f"{market}:{interval}:{tier}"
+        return self._store.backfill_progress.get(key)
+
+    async def upsert(self, progress: Any) -> None:
+        market = getattr(progress, "market", "")
+        interval = getattr(progress, "interval", "")
+        tier = getattr(progress, "tier", "")
+        key = f"{market}:{interval}:{tier}"
+        self._store.backfill_progress[key] = progress
+
+    async def update_cursor(self, progress_id: str, cursor: Any, completion_ratio: float) -> None:
+        for prog in self._store.backfill_progress.values():
+            if getattr(prog, "progress_id", None) == progress_id:
+                prog.cursor = cursor
+                prog.completion_ratio = completion_ratio
+                break
+
+
 class InMemoryUnitOfWork:
     def __init__(self, store: InMemoryEventStore | None = None) -> None:
         self.store = store or InMemoryEventStore()
@@ -160,9 +249,12 @@ class InMemoryUnitOfWork:
         self.news = _InMemoryNewsRepository(self.store)
         self.basic_infos = _InMemoryBasicInfoRepository(self.store)
         self.candidates = _InMemoryCandidateRepository(self.store)
+        self.positions = _InMemoryPositionRepository(self.store)
         self.memories = _InMemoryMemoryRepository(self.store)
         self.signals = _InMemorySignalRepository(self.store)
         self.candles = _InMemoryCandleRepository(self.store)
+        self.kline_sync_states = _InMemoryKlineSyncStateRepository(self.store)
+        self.backfill_progress = _InMemoryBackfillProgressRepository(self.store)
 
     async def __aenter__(self) -> InMemoryUnitOfWork:
         return self

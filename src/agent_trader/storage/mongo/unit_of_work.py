@@ -9,31 +9,30 @@ from __future__ import annotations
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent_trader.storage.base import (
+    BackfillProgressRepository,
     BasicInfoRepository,
     CandleRepository,
     CandidateRepository,
+    KlineSyncStateRepository,
     MemoryRepository,
     NewsRepository,
+    PositionRepository,
     SignalRepository,
     SourcePriorityRepository,
     UnitOfWork,
 )
 from agent_trader.storage.mongo.repository import (
+    MongoBackfillProgressRepository,
     MongoBasicInfoRepository,
+    MongoCandidateRepository,
+    MongoKlineSyncStateRepository,
     MongoNewsRepository,
+    MongoPositionRepository,
     MongoSourcePriorityRepository,
     MongoTaskArtifactRepository,
     MongoTaskEventRepository,
     MongoTaskRunRepository,
 )
-
-
-class _UnsupportedCandidateRepository:
-    async def upsert(self, candidate: object) -> object:
-        raise NotImplementedError("Candidate repository 尚未接入 Mongo 运行模型")
-
-    async def list_active(self) -> list[object]:
-        raise NotImplementedError("Candidate repository 尚未接入 Mongo 运行模型")
 
 
 class _UnsupportedMemoryRepository:
@@ -74,8 +73,12 @@ class MongoUnitOfWork(UnitOfWork):
         self.news: NewsRepository = MongoNewsRepository(database)
         self.basic_infos: BasicInfoRepository = MongoBasicInfoRepository(database)
         self.source_priorities: SourcePriorityRepository = MongoSourcePriorityRepository(database)
+        self.candidates: CandidateRepository = MongoCandidateRepository(database)
+        self.positions: PositionRepository = MongoPositionRepository(database)
+        # K 线同步状态与回补进度
+        self.kline_sync_states: KlineSyncStateRepository = MongoKlineSyncStateRepository(database)
+        self.backfill_progress: BackfillProgressRepository = MongoBackfillProgressRepository(database)
         # 尚未接入 Mongo 的仓库（占位）
-        self.candidates: CandidateRepository = _UnsupportedCandidateRepository()
         self.memories: MemoryRepository = _UnsupportedMemoryRepository()
         self.signals: SignalRepository = _UnsupportedSignalRepository()
         self.candles: CandleRepository = _UnsupportedCandleRepository()

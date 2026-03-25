@@ -1,12 +1,26 @@
 from __future__ import annotations
 
-import logging
+"""Worker facade module.
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
+Historically worker startup, factories and jobs lived in this module.
+Now they are split across:
+- worker.runtime
+- worker.factory
+- worker.jobs
 
-logger = logging.getLogger(__name__)
+This file keeps backward-compatible imports for existing callers/tests.
+"""
 
-# 定时器
-def create_scheduler() -> AsyncIOScheduler:
-    scheduler = AsyncIOScheduler()
-    return scheduler
+from agent_trader.worker.factory import build_kline_sync_service_factory, create_scheduler
+from agent_trader.worker.jobs import register_kline_sync_jobs
+from agent_trader.worker.runtime import WorkerRuntime, bootstrap_worker, main, run_worker_forever
+
+__all__ = [
+    "WorkerRuntime",
+    "bootstrap_worker",
+    "run_worker_forever",
+    "main",
+    "create_scheduler",
+    "build_kline_sync_service_factory",
+    "register_kline_sync_jobs",
+]

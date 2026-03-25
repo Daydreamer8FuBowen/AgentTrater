@@ -19,25 +19,29 @@
 ### 为什么这样做
 
 - 项目已有 `apscheduler` 依赖与 `worker` 配置项。
-- 项目已有 `worker/main.py` 的调度器工厂函数，便于扩展。
+- 项目已有 `worker/factory.py`、`worker/jobs.py`、`worker/runtime.py`，便于分层扩展。
 - 若在 `uvicorn --workers N` 的 API 进程中直接启调度器，容易出现同一任务被执行 N 次。
 
 ## 2. 代码落点
 
 建议按以下边界组织：
 
+- `src/agent_trader/worker/factory.py`
+  - 构造调度器、组装 `KlineSyncService` 依赖。
+- `src/agent_trader/worker/jobs.py`
+  - 注册任务与交易时段判断（实时/回补守卫）。
+- `src/agent_trader/worker/runtime.py`
+  - 连接生命周期、调度器启动/停止、优雅退出。
 - `src/agent_trader/worker/main.py`
-  - 创建调度器、注册任务、启动与关闭。
-- `src/agent_trader/worker/tasks.py`
-  - 具体任务函数（如 `ingestion_job`、`refresh_candidates_job`）。
+  - 兼容入口与对外导出。
 - `src/agent_trader/core/config.py`
-  - 任务间隔与时区配置（`WorkerConfig`）。
+  - 时区配置（`WorkerConfig`）与同步任务配置（`KlineSyncConfig`）。
 - `src/agent_trader/storage/connection_manager.py`
   - 复用连接生命周期管理，避免任务中直接 new 连接。
 
 ## 3. 标准实现步骤
 
-### 步骤 1：实现任务函数（`tasks.py`）
+### 步骤 1：实现任务函数（`jobs.py`）
 
 规则：
 
@@ -45,37 +49,35 @@
 - 每个任务只负责一个明确职责。
 - 必须做异常捕获并记录日志，不让异常导致调度器退出。
 
-示例：
+示例（交易时段守卫）：
 
 ```python
-import logging
+from datetime import datetime
 
-logger = logging.getLogger(__name__)
+def _should_run_realtime(market: str, now: datetime | None = None) -> bool:
+  now_value = now or datetime.now()
+  return _is_market_trading_time(market, now_value)
 
 
-async def ingestion_job(*, gateway) -> None:
-    try:
-        logger.info("ingestion_job start")
-        # TODO: 调用网关拉取并落库
-        logger.info("ingestion_job done")
-    except Exception:
-        logger.exception("ingestion_job failed")
+def _should_run_backfill(market: str, now: datetime | None = None) -> bool:
+  now_value = now or datetime.now()
+  return not _is_market_trading_time(market, now_value)
 ```
 
-### 步骤 2：注册任务（`main.py`）
+### 步骤 2：注册任务（`jobs.py`）
 
 核心 API：
 
 ```python
 scheduler.add_job(
-    ingestion_job,
-    trigger=IntervalTrigger(seconds=config.ingestion_interval_seconds, timezone=tz),
-    kwargs={"gateway": gateway},
-    id="ingestion",
+  _run_realtime_positions,
+  "interval",
+  seconds=sync_config.realtime_m5_interval_seconds,
+  kwargs={"service_factory": service_factory, "market": market},
+  id=f"realtime_m5_positions_{market}",
     replace_existing=True,
     max_instances=1,
     coalesce=True,
-    misfire_grace_time=60,
 )
 ```
 
@@ -85,7 +87,7 @@ scheduler.add_job(
 - `replace_existing=True`：重复启动时覆盖旧任务定义。
 - `max_instances=1`：避免任务重叠并发。
 - `coalesce=True`：积压触发合并为一次，防止补偿风暴。
-- `misfire_grace_time`：允许短暂错过触发后补执行。
+- 可按任务特性补充 `misfire_grace_time`。
 
 ### 步骤 3：启动与优雅关闭
 
@@ -94,25 +96,13 @@ scheduler.add_job(
 
 示例：
 
-```python
-from zoneinfo import ZoneInfo
-from apscheduler.triggers.interval import IntervalTrigger
+当前实现中，任务由 `register_kline_sync_jobs(...)` 统一注册，包含：
 
-
-def register_jobs(scheduler, config, gateway):
-    tz = ZoneInfo(config.timezone)
-
-    scheduler.add_job(
-        ingestion_job,
-        trigger=IntervalTrigger(seconds=config.ingestion_interval_seconds, timezone=tz),
-        kwargs={"gateway": gateway},
-        id="ingestion",
-        replace_existing=True,
-        max_instances=1,
-        coalesce=True,
-        misfire_grace_time=60,
-    )
-```
+- 实时 5m 持仓同步
+- 实时 5m 候选同步
+- 每日 D1 同步
+- 非交易时段 D1 回补
+- 非交易时段 M5 回补
 
 ## 4. 与 FastAPI 生命周期的关系
 
@@ -128,12 +118,16 @@ def register_jobs(scheduler, config, gateway):
 
 ## 5. 配置规范
 
-沿用 `WorkerConfig`：
+沿用 `WorkerConfig` 与 `KlineSyncConfig`：
 
 - `WORKER_TIMEZONE`
-- `WORKER_INGESTION_INTERVAL_SECONDS`
-- `WORKER_CANDIDATE_REFRESH_SECONDS`
-- `WORKER_BACKTEST_INTERVAL_SECONDS`
+- `SYNC_ENABLED_MARKETS`
+- `SYNC_D1_WINDOW_DAYS`
+- `SYNC_M5_WINDOW_DAYS`
+- `SYNC_REALTIME_M5_INTERVAL_SECONDS`
+- `SYNC_D1_SYNC_HOUR`
+- `SYNC_BACKFILL_BATCH_SYMBOLS`
+- `SYNC_M5_BACKFILL_CHUNK_DAYS`
 
 建议：
 

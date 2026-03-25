@@ -8,8 +8,10 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent_trader.application.data_access.gateway import DataAccessGateway, DataSourceRegistry, SourceSelectionAdapter
 from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
+from agent_trader.api.routes.charts import router as charts_router
 from agent_trader.api.routes.data import router as data_router
 from agent_trader.api.routes.health import router as health_router
+from agent_trader.api.routes.symbols import router as symbols_router
 from agent_trader.core.config import get_settings
 from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.core.logging import configure_logging
@@ -173,6 +175,8 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(data_router, prefix="/api/v1")
+    app.include_router(symbols_router, prefix="/api/v1")
+    app.include_router(charts_router, prefix="/api/v1")
     return app
 
 

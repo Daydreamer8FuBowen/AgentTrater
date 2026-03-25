@@ -32,6 +32,10 @@
 - `POST /api/v1/data/news`
 - `POST /api/v1/data/financial-reports`
 - `GET /api/v1/data/basic-info`
+- `GET /api/v1/symbols`
+- `GET /api/v1/symbols/monitor`
+- `GET /api/v1/symbols/{symbol}`
+- `GET /api/v1/charts/history`
 - `GET /health`
 
 ## 开发
@@ -39,6 +43,20 @@
 ```bash
 uv sync
 uv run uvicorn agent_trader.api.main:app --reload
+```
+
+启动后台同步 worker：
+
+```bash
+uv run python -m agent_trader.worker
+```
+
+启动前端管理台：
+
+```bash
+cd frontend/admin-console
+npm install
+npm run dev
 ```
 
 本地依赖服务：
@@ -56,6 +74,8 @@ uv run pytest -q
 ## 文档
 
 - `docs/ARCHITECTURE.md`
+- `docs/README.md`
+- `docs/DB_DESIGN.md`
 - `docs/DATASOURCE.md`
 - `docs/SOURCE_CAPABILITY_CONTRACTS.md`
 - `docs/UNIFIED_SOURCE_PAYLOAD_SPEC.md`

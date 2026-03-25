@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from datetime import datetime
 from typing import Any, Protocol
 
 from agent_trader.domain.models import Candle, Candidate, MemoryRecord, SignalSnapshot
@@ -41,6 +42,7 @@ class BasicInfoRepository(Protocol):
     """标的基础信息快照仓储接口。"""
 
     async def upsert_many_by_symbol(self, items: Sequence[Any]) -> dict[str, int]: ...
+    async def list_symbols_by_market(self, market: str) -> list[str]: ...
 
 
 class CandidateRepository(Protocol):
@@ -48,6 +50,13 @@ class CandidateRepository(Protocol):
 
     async def upsert(self, candidate: Candidate) -> Candidate: ...
     async def list_active(self) -> Sequence[Candidate]: ...
+
+
+class PositionRepository(Protocol):
+    """持仓查询与写入接口（与策略无关）。"""
+
+    async def upsert(self, position: Any) -> Any: ...
+    async def list_active(self) -> Sequence[Any]: ...
 
 
 class MemoryRepository(Protocol):
@@ -67,6 +76,15 @@ class CandleRepository(Protocol):
 
     async def write(self, candle: Candle) -> None: ...
     async def write_batch(self, candles: Sequence[Candle]) -> None: ...
+    async def query_history(
+        self,
+        *,
+        symbol: str,
+        interval: str,
+        start_time: datetime,
+        end_time: datetime,
+        limit: int = 5000,
+    ) -> Sequence[dict[str, Any]]: ...
 
 
 class SourcePriorityRepository(Protocol):
@@ -84,6 +102,21 @@ class SourcePriorityRepository(Protocol):
     async def reorder(self, route_key: DataRouteKey, *, priorities: list[str]) -> None: ...
 
 
+class KlineSyncStateRepository(Protocol):
+    """K 线同步状态仓储接口。"""
+
+    async def get_or_create(self, symbol: str, market: str, interval: str) -> Any: ...
+    async def update(self, state: Any) -> None: ...
+
+
+class BackfillProgressRepository(Protocol):
+    """历史回补进度仓储接口。"""
+
+    async def get(self, market: str, interval: str, tier: str) -> Any | None: ...
+    async def upsert(self, progress: Any) -> None: ...
+    async def update_cursor(self, progress_id: str, cursor: datetime, completion_ratio: float) -> None: ...
+
+
 class UnitOfWork(Protocol):
     """把一次业务操作涉及的多仓储写入收敛到同一个事务边界。"""
 
@@ -93,10 +126,13 @@ class UnitOfWork(Protocol):
     news: NewsRepository
     basic_infos: BasicInfoRepository
     candidates: CandidateRepository
+    positions: PositionRepository
     memories: MemoryRepository
     signals: SignalRepository
     candles: CandleRepository
     source_priorities: SourcePriorityRepository
+    kline_sync_states: KlineSyncStateRepository
+    backfill_progress: BackfillProgressRepository
 
     async def __aenter__(self) -> UnitOfWork: ...
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None: ...

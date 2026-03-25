@@ -15,9 +15,13 @@ from agent_trader.storage.mongo.documents import (
     AgentDefinitionDocument,
     AgentReleaseDocument,
     AgentReleasePointerDocument,
+    BackfillProgressDocument,
     BasicInfoDocument,
+    CandidateDocument,
+    KlineSyncStateDocument,
     MongoDocument,
     NewsDocument,
+    PositionDocument,
     SkillDefinitionDocument,
     SkillVersionDocument,
     SourcePriorityRouteDocument,
@@ -174,6 +178,47 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
                     unique=True,
                 ),
                 IndexModel([("enabled", ASCENDING), ("updated_at", DESCENDING)]),
+            ),
+        ),
+        _document_config(
+            CandidateDocument,
+            indexes=(
+                IndexModel([(CandidateDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel([("symbol_id", ASCENDING), ("status", ASCENDING)]),
+                IndexModel([("status", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("deprecated_at", ASCENDING)]),
+            ),
+        ),
+        _document_config(
+            PositionDocument,
+            indexes=(
+                IndexModel([(PositionDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel([("symbol_id", ASCENDING), ("status", ASCENDING)]),
+                IndexModel([("status", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel([("deprecated_at", ASCENDING)]),
+            ),
+        ),
+        _document_config(
+            KlineSyncStateDocument,
+            indexes=(
+                IndexModel([(KlineSyncStateDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel(
+                    [("symbol", ASCENDING), ("market", ASCENDING), ("interval", ASCENDING)],
+                    unique=True,
+                ),
+                IndexModel([("market", ASCENDING), ("interval", ASCENDING), ("status", ASCENDING)]),
+                IndexModel([("last_bar_time", ASCENDING)]),
+            ),
+        ),
+        _document_config(
+            BackfillProgressDocument,
+            indexes=(
+                IndexModel([(BackfillProgressDocument.primary_key, ASCENDING)], unique=True),
+                IndexModel(
+                    [("market", ASCENDING), ("interval", ASCENDING), ("tier", ASCENDING)],
+                    unique=True,
+                ),
+                IndexModel([("status", ASCENDING), ("updated_at", DESCENDING)]),
             ),
         ),
     )

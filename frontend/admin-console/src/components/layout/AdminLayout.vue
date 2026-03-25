@@ -27,6 +27,7 @@ const menuGroups = [
     title: '核心模块',
     items: [
       { label: '仪表盘', icon: DataBoard, path: '/dashboard' },
+      { label: 'Symbol 监控', icon: Monitor, path: '/symbols' },
       { label: '智能体管理', icon: Cpu, path: '/agents' },
       { label: '策略编辑', icon: TrendCharts, path: '/strategy-editor' },
       { label: '回测分析', icon: DataAnalysis, path: '/backtest-analysis' },

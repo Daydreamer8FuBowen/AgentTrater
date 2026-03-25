@@ -4,9 +4,10 @@ import asyncio
 from dataclasses import dataclass
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from typing import Any, TypeVar
 
-from agent_trader.domain.models import ExchangeKind
+from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
     BasicInfoFetchResult,
     DataCapability,
@@ -18,6 +19,11 @@ from agent_trader.ingestion.models import (
     KlineQuery,
     NewsFetchResult,
     NewsQuery,
+)
+
+from agent_trader.application.data_access.kline_utils import (
+    MAX_KLINE_BARS,
+    estimate_kline_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,6 +207,18 @@ class DataAccessGateway:
         return await asyncio.gather(*[_fetch_one(name) for name in source_names])
 
     async def fetch_klines(self, query: KlineQuery) -> KlineFetchResult:
+        estimated = estimate_kline_count(
+            query.start_time,
+            query.end_time,
+            query.interval,
+            query.market,
+        )
+        if estimated > MAX_KLINE_BARS:
+            raise ValueError(
+                f"K线单次请求预计返回 {estimated} 条，超过上限 {MAX_KLINE_BARS}；"
+                "请缩小时间范围后重试"
+            )
+
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
             market=query.market,

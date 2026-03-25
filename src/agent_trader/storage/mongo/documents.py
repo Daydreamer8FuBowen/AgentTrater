@@ -408,3 +408,146 @@ class SourcePriorityRouteDocument(TimestampedDocument):
     priorities: list[str] = Field(default_factory=list)
     enabled: bool = True
     metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class CandidateDocument(MongoDocument):
+    """候选池文档（集合 `candidates`）。"""
+
+    collection_name: ClassVar[str] = "candidates"
+    primary_key: ClassVar[str] = "candidate_id"
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "candidate_id",
+        "symbol_id",
+        "symbol",
+        "status",
+        "score",
+    )
+    json_fields: ClassVar[tuple[str, ...]] = (
+        "audit_ids",
+        "tags",
+        "metadata",
+    )
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "symbol_id",
+        "symbol",
+        "status",
+        "score",
+        "audit_ids",
+        "deprecated_at",
+        "tags",
+        "notes",
+        "metadata",
+    )
+
+    candidate_id: str = Field(default_factory=lambda: _new_identifier("candidate"))
+    symbol_id: str
+    symbol: str
+    status: str = "active"
+    score: float = 0.0
+    audit_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    deprecated_at: datetime | None = None
+    tags: list[str] = Field(default_factory=list)
+    notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class PositionDocument(MongoDocument):
+    """持仓文档（集合 `positions`，与策略无关）。"""
+
+    collection_name: ClassVar[str] = "positions"
+    primary_key: ClassVar[str] = "position_id"
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "position_id",
+        "symbol_id",
+        "symbol",
+        "status",
+        "position_ratio",
+    )
+    json_fields: ClassVar[tuple[str, ...]] = (
+        "audit_ids",
+        "metadata",
+    )
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "symbol_id",
+        "symbol",
+        "status",
+        "position_ratio",
+        "position_cost",
+        "audit_ids",
+        "deprecated_at",
+        "metadata",
+    )
+
+    position_id: str = Field(default_factory=lambda: _new_identifier("position"))
+    symbol_id: str
+    symbol: str
+    status: str = "active"
+    position_ratio: float = 0.0
+    position_cost: float = 0.0
+    audit_ids: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    deprecated_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class KlineSyncStateDocument(MongoDocument):
+    """K 线同步状态文档（集合 `kline_sync_states`）。
+
+    每个 (symbol, market, interval) 组合维护一条记录，追踪拉取进度与健康状态。
+    """
+
+    collection_name: ClassVar[str] = "kline_sync_states"
+    primary_key: ClassVar[str] = "state_id"
+    searchable_fields: ClassVar[tuple[str, ...]] = ("state_id", "symbol", "market", "interval", "status")
+    json_fields: ClassVar[tuple[str, ...]] = ()
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "last_bar_time",
+        "last_fetched_at",
+        "lag_seconds",
+        "consecutive_failures",
+        "status",
+        "updated_at",
+    )
+
+    state_id: str = Field(default_factory=lambda: _new_identifier("kss"))
+    symbol: str
+    market: str
+    interval: str  # "1d" | "5m"
+    last_bar_time: datetime | None = None
+    last_fetched_at: datetime | None = None
+    lag_seconds: float = 0.0
+    consecutive_failures: int = 0
+    status: str = "ok"  # "ok" | "lagging" | "failed"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+
+class BackfillProgressDocument(MongoDocument):
+    """历史回补进度文档（集合 `backfill_progress`）。
+
+    按 (market, interval, tier) 维护一条进度记录，通过 cursor 支持断点续跑。
+    """
+
+    collection_name: ClassVar[str] = "backfill_progress"
+    primary_key: ClassVar[str] = "progress_id"
+    searchable_fields: ClassVar[tuple[str, ...]] = ("progress_id", "market", "interval", "tier", "status")
+    json_fields: ClassVar[tuple[str, ...]] = ()
+    editable_fields: ClassVar[tuple[str, ...]] = (
+        "cursor",
+        "completion_ratio",
+        "status",
+        "updated_at",
+    )
+
+    progress_id: str = Field(default_factory=lambda: _new_identifier("bfp"))
+    market: str
+    interval: str  # "1d" | "5m"
+    tier: str  # "AB" | "ABC"
+    target_start: datetime
+    target_end: datetime
+    cursor: datetime | None = None  # 当前回补进度指针
+    completion_ratio: float = 0.0
+    status: str = "pending"  # "pending" | "running" | "completed" | "failed"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)

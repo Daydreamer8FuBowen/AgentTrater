@@ -4,6 +4,8 @@ import AdminLayout from '../components/layout/AdminLayout.vue'
 import AgentManagementPage from '../pages/AgentManagementPage.vue'
 import BacktestAnalysisPage from '../pages/BacktestAnalysisPage.vue'
 import DashboardPage from '../pages/DashboardPage.vue'
+import SymbolDetailPage from '../pages/SymbolDetailPage.vue'
+import SymbolListPage from '../pages/SymbolListPage.vue'
 import StrategyEditorPage from '../pages/StrategyEditorPage.vue'
 import SystemConfigPage from '../pages/SystemConfigPage.vue'
 import AgentDefinitionsTablePage from '../pages/tables/AgentDefinitionsTablePage.vue'
@@ -24,6 +26,8 @@ const router = createRouter({
       children: [
         { path: '', redirect: '/dashboard' },
         { path: 'dashboard', component: DashboardPage },
+        { path: 'symbols', component: SymbolListPage },
+        { path: 'symbols/:symbol', component: SymbolDetailPage },
         { path: 'agents', component: AgentManagementPage },
         { path: 'strategy-editor', component: StrategyEditorPage },
         { path: 'backtest-analysis', component: BacktestAnalysisPage },

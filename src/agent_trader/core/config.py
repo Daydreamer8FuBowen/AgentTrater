@@ -107,6 +107,20 @@ class BaoStockConfig(BaseModel):
     options: int
 
 
+class KlineSyncConfig(BaseModel):
+    """K 线历史同步后台任务配置。"""
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled_markets: list[str]          # 启用同步的市场列表，如 ["sse", "szse"]
+    d1_window_days: int                 # D1 历史回补窗口（天），默认 730
+    m5_window_days: int                 # M5 历史回补窗口（天），默认 60
+    realtime_m5_interval_seconds: int   # 实时 5m 拉取间隔（秒），默认 60
+    d1_sync_hour: int                   # 每日 D1 同步触发小时（本地时间），默认 17
+    backfill_batch_symbols: int         # 每批回补处理的 symbol 数量，默认 20
+    m5_backfill_chunk_days: int         # M5 回补每次请求覆盖的天数，默认 20
+
+
 class Settings(BaseSettings):
     """统一配置入口。
 
@@ -164,6 +178,14 @@ class Settings(BaseSettings):
     baostock_user_id: str = Field(default="anonymous", alias="BAOSTOCK_USER_ID")
     baostock_password: str = Field(default="123456", alias="BAOSTOCK_PASSWORD")
     baostock_options: int = Field(default=0, alias="BAOSTOCK_OPTIONS")
+
+    sync_enabled_markets: str = Field(default="sse,szse", alias="SYNC_ENABLED_MARKETS")
+    sync_d1_window_days: int = Field(default=730, alias="SYNC_D1_WINDOW_DAYS")
+    sync_m5_window_days: int = Field(default=60, alias="SYNC_M5_WINDOW_DAYS")
+    sync_realtime_m5_interval_seconds: int = Field(default=60, alias="SYNC_REALTIME_M5_INTERVAL_SECONDS")
+    sync_d1_sync_hour: int = Field(default=17, alias="SYNC_D1_SYNC_HOUR")
+    sync_backfill_batch_symbols: int = Field(default=20, alias="SYNC_BACKFILL_BATCH_SYMBOLS")
+    sync_m5_backfill_chunk_days: int = Field(default=20, alias="SYNC_M5_BACKFILL_CHUNK_DAYS")
 
     model_config = SettingsConfigDict(
         env_file=(".env.local", ".env"),
@@ -267,6 +289,19 @@ class Settings(BaseSettings):
             user_id=self.baostock_user_id,
             password=self.baostock_password,
             options=self.baostock_options,
+        )
+
+    @property
+    def kline_sync(self) -> KlineSyncConfig:
+        """返回 K 线同步后台任务配置。"""
+        return KlineSyncConfig(
+            enabled_markets=[m.strip() for m in self.sync_enabled_markets.split(",") if m.strip()],
+            d1_window_days=self.sync_d1_window_days,
+            m5_window_days=self.sync_m5_window_days,
+            realtime_m5_interval_seconds=self.sync_realtime_m5_interval_seconds,
+            d1_sync_hour=self.sync_d1_sync_hour,
+            backfill_batch_symbols=self.sync_backfill_batch_symbols,
+            m5_backfill_chunk_days=self.sync_m5_backfill_chunk_days,
         )
 
 

@@ -11,10 +11,13 @@ from agent_trader.application.data_access.gateway import (
     SourceSelectionAdapter,
 )
 from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
+from agent_trader.application.services.chart_history_service import ChartHistoryService
+from agent_trader.application.services.symbol_query_service import SymbolQueryService
 from agent_trader.core.config import Settings, get_settings
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 from agent_trader.storage.base import SourcePriorityRepository, UnitOfWork
+from agent_trader.storage.influx import InfluxCandleRepository
 from agent_trader.storage.influx import InfluxConnectionManager
 from agent_trader.storage.mongo import MongoConnectionManager, MongoUnitOfWork
 
@@ -95,3 +98,16 @@ def get_basic_info_aggregation_service(
         gateway=gateway,
         uow_factory=lambda: MongoUnitOfWork(database),
     )
+
+
+def get_symbol_query_service(
+    database: AsyncIOMotorDatabase = Depends(get_mongo_database),
+) -> SymbolQueryService:
+    return SymbolQueryService(database)
+
+
+def get_chart_history_service(
+    influx_manager: InfluxConnectionManager = Depends(get_influx_manager),
+) -> ChartHistoryService:
+    candle_repository = InfluxCandleRepository(influx_manager)
+    return ChartHistoryService(candle_repository)

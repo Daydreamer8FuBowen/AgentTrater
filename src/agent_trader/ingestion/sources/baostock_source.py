@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import threading
+import time
 from datetime import datetime
 from typing import Any, Callable, TypeVar
 
@@ -35,6 +37,45 @@ from agent_trader.ingestion.models import (
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+_BS_SESSION_LOCK = threading.Lock()
+_BS_QPS_LIMIT = 10
+
+
+class _RateLimiter:
+    """简单的令牌桶限速器（线程安全）。"""
+
+    def __init__(self, rate_per_sec: float) -> None:
+        self._rate = float(rate_per_sec)
+        self._capacity = float(rate_per_sec)
+        self._tokens = float(rate_per_sec)
+        self._last = time.monotonic()
+        self._cond = threading.Condition()
+
+    def acquire(self) -> None:
+        with self._cond:
+            while True:
+                now = time.monotonic()
+                elapsed = now - self._last
+                self._last = now
+                # refill tokens
+                self._tokens = min(self._capacity, self._tokens + elapsed * self._rate)
+                if self._tokens >= 1.0:
+                    self._tokens -= 1.0
+                    return
+                # 计算等待时间并等待
+                need = (1.0 - self._tokens) / self._rate
+                # 限制最大等待时长为 1s，避免长时间阻塞 Condition
+                wait_for = min(max(need, 0.001), 1.0)
+                self._cond.wait(wait_for)
+
+
+_BS_RATE_LIMITER = _RateLimiter(_BS_QPS_LIMIT)
+
+
+def _call_baostock(func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """通过全局限速器调用 baostock API（在调用前阻塞直到有令牌）。"""
+    _BS_RATE_LIMITER.acquire()
+    return func(*args, **kwargs)
 
 _INTERVAL_TO_FREQ: dict[BarInterval, str] = {
     BarInterval.M5: "5",
@@ -50,19 +91,16 @@ _DAYLIKE_FIELDS = (
 )
 _MINUTE_FIELDS = "date,time,code,open,high,low,close,volume,amount,adjustflag"
 _VALUE_SKIP_FIELDS = {"code", "symbol", "date", "time", "pubDate", "statDate"}
-_QUARTERLY_REPORT_TYPES = {
-    "profit": "query_profit_data",
-    "operation": "query_operation_data",
-    "growth": "query_growth_data",
-    "balance": "query_balance_data",
-    "cash_flow": "query_cash_flow_data",
-    "dupont": "query_dupont_data",
-}
-_DATE_RANGE_REPORT_TYPES = {
-    "forecast": "query_forecast_report",
-    "performance_express": "query_performance_express_report",
-}
-_DEFAULT_REPORT_TYPES = tuple(_QUARTERLY_REPORT_TYPES.keys()) + tuple(_DATE_RANGE_REPORT_TYPES.keys())
+_ALL_REPORT_TYPES = (
+    "profit",
+    "operation",
+    "growth",
+    "balance",
+    "cash_flow",
+    "dupont",
+    "forecast",
+    "performance_express",
+)
 _BAOSTOCK_SECURITY_TYPE_MAP: dict[str, str] = {
     "1": "stock",
     "2": "index",
@@ -183,11 +221,9 @@ class BaoStockSource:
         )
 
         code = _to_baostock_symbol(query.symbol, query.market)
-        report_types = _resolve_report_types(query.extra)
         payload = await asyncio.to_thread(
             self._query_financial_payload,
             code,
-            report_types,
             query.start_time,
             query.end_time,
         )
@@ -196,7 +232,7 @@ class BaoStockSource:
             "fetch_financial_reports_unified: fetched %d records symbol=%s report_types=%s",
             len(payload),
             query.symbol,
-            report_types,
+            _ALL_REPORT_TYPES,
         )
         return FinancialReportFetchResult(
             source=self.name,
@@ -204,7 +240,7 @@ class BaoStockSource:
             payload=payload,
             metadata={
                 "symbol": query.symbol,
-                "report_types": report_types,
+                "report_types": _ALL_REPORT_TYPES,
                 "count": len(payload),
             },
         )
@@ -263,23 +299,43 @@ class BaoStockSource:
         Returns:
             标准化后的 `KlineRecord` 列表。
         """
+        return self._run_with_session(
+            self._query_kline_payload_in_session,
+            code,
+            fields,
+            start_date,
+            end_date,
+            frequency,
+            adjustflag,
+            interval,
+            adjusted,
+        )
 
-        def operation() -> list[KlineRecord]:
-            result = bs.query_history_k_data_plus(
-                code,
-                fields,
-                start_date=start_date,
-                end_date=end_date,
-                frequency=frequency,
-                adjustflag=adjustflag,
-            )
-            rows = self._rows_from_result(result)
-            return [
-                _normalize_baostock_kline_record(record, interval, adjusted, code)
-                for record in rows
-            ]
-
-        return self._run_with_session(operation)
+    def _query_kline_payload_in_session(
+        self,
+        code: str,
+        fields: str,
+        start_date: str,
+        end_date: str,
+        frequency: str,
+        adjustflag: str,
+        interval: BarInterval,
+        adjusted: bool,
+    ) -> list[KlineRecord]:
+        result = _call_baostock(
+            bs.query_history_k_data_plus,
+            code,
+            fields,
+            start_date=start_date,
+            end_date=end_date,
+            frequency=frequency,
+            adjustflag=adjustflag,
+        )
+        rows = self._rows_from_result(result)
+        return [
+            _normalize_baostock_kline_record(record, interval, adjusted, code)
+            for record in rows
+        ]
 
     def _query_stock_basic_payload(self) -> list[BasicInfoRecord]:
         """在同步上下文中调用 BaoStock 的股票基础信息查询并返回标准化记录。
@@ -287,17 +343,16 @@ class BaoStockSource:
         返回一个 `BasicInfoRecord` 列表，用于后续封装到 `BasicInfoFetchResult`。
         """
 
-        def operation() -> list[BasicInfoRecord]:
-            result = bs.query_stock_basic()
-            rows = self._rows_from_result(result)
-            return [_normalize_baostock_basic_info_record(record) for record in rows]
+        return self._run_with_session(self._query_stock_basic_payload_in_session)
 
-        return self._run_with_session(operation)
+    def _query_stock_basic_payload_in_session(self) -> list[BasicInfoRecord]:
+        result = _call_baostock(bs.query_stock_basic)
+        rows = self._rows_from_result(result)
+        return [_normalize_baostock_basic_info_record(record) for record in rows]
 
     def _query_financial_payload(
         self,
         code: str,
-        report_types: tuple[str, ...],
         start_time: datetime | None,
         end_time: datetime | None,
     ) -> list[FinancialReportRecord]:
@@ -306,61 +361,160 @@ class BaoStockSource:
         支持按季度类型和按时间范围的报表方法。
         """
 
-        def operation() -> list[FinancialReportRecord]:
-            payload: list[FinancialReportRecord] = []
-            for report_type in report_types:
-                if report_type in _QUARTERLY_REPORT_TYPES:
-                    method = getattr(bs, _QUARTERLY_REPORT_TYPES[report_type])
-                    for year, quarter in _iter_quarters(start_time, end_time):
-                        result = method(code, year=year, quarter=quarter)
-                        for record in self._rows_from_result(result):
-                            payload.append(
-                                _normalize_baostock_financial_record(
-                                    record,
-                                    symbol_hint=code,
-                                    report_type=report_type,
-                                    report_year=year,
-                                    report_quarter=quarter,
-                                )
-                            )
-                    continue
+        return self._run_with_session(
+            self._query_financial_payload_in_session,
+            code,
+            start_time,
+            end_time,
+        )
 
-                method = getattr(bs, _DATE_RANGE_REPORT_TYPES[report_type])
-                result = method(
+    def _query_financial_payload_in_session(
+        self,
+        code: str,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> list[FinancialReportRecord]:
+        payload: list[FinancialReportRecord] = []
+        for year, quarter in _iter_quarters(start_time, end_time):
+            payload.extend(
+                self._fetch_quarterly_report_rows(
                     code,
-                    start_date=_format_date(start_time),
-                    end_date=_format_date(end_time),
+                    report_type="profit",
+                    method=bs.query_profit_data,
+                    year=year,
+                    quarter=quarter,
                 )
-                for record in self._rows_from_result(result):
-                    payload.append(
-                        _normalize_baostock_financial_record(
-                            record,
-                            symbol_hint=code,
-                            report_type=report_type,
-                        )
-                    )
-            return payload
+            )
+            payload.extend(
+                self._fetch_quarterly_report_rows(
+                    code,
+                    report_type="operation",
+                    method=bs.query_operation_data,
+                    year=year,
+                    quarter=quarter,
+                )
+            )
+            payload.extend(
+                self._fetch_quarterly_report_rows(
+                    code,
+                    report_type="growth",
+                    method=bs.query_growth_data,
+                    year=year,
+                    quarter=quarter,
+                )
+            )
+            payload.extend(
+                self._fetch_quarterly_report_rows(
+                    code,
+                    report_type="balance",
+                    method=bs.query_balance_data,
+                    year=year,
+                    quarter=quarter,
+                )
+            )
+            payload.extend(
+                self._fetch_quarterly_report_rows(
+                    code,
+                    report_type="cash_flow",
+                    method=bs.query_cash_flow_data,
+                    year=year,
+                    quarter=quarter,
+                )
+            )
+            payload.extend(
+                self._fetch_quarterly_report_rows(
+                    code,
+                    report_type="dupont",
+                    method=bs.query_dupont_data,
+                    year=year,
+                    quarter=quarter,
+                )
+            )
 
-        return self._run_with_session(operation)
+        start_date = _format_date(start_time)
+        end_date = _format_date(end_time)
+        payload.extend(
+            self._fetch_date_range_report_rows(
+                code,
+                report_type="forecast",
+                method=bs.query_forecast_report,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+        payload.extend(
+            self._fetch_date_range_report_rows(
+                code,
+                report_type="performance_express",
+                method=bs.query_performance_express_report,
+                start_date=start_date,
+                end_date=end_date,
+            )
+        )
+        return payload
 
-    def _run_with_session(self, operation: Callable[[], _T]) -> _T:
+    def _fetch_quarterly_report_rows(
+        self,
+        code: str,
+        *,
+        report_type: str,
+        method: Callable[..., Any],
+        year: int,
+        quarter: int,
+    ) -> list[FinancialReportRecord]:
+        result = _call_baostock(method, code, year=year, quarter=quarter)
+        return [
+            _normalize_baostock_financial_record(
+                record,
+                symbol_hint=code,
+                report_type=report_type,
+                report_year=year,
+                report_quarter=quarter,
+            )
+            for record in self._rows_from_result(result)
+        ]
+
+    def _fetch_date_range_report_rows(
+        self,
+        code: str,
+        *,
+        report_type: str,
+        method: Callable[..., Any],
+        start_date: str | None,
+        end_date: str | None,
+    ) -> list[FinancialReportRecord]:
+        result = _call_baostock(
+            method, code, start_date=start_date, end_date=end_date
+        )
+        return [
+            _normalize_baostock_financial_record(
+                record,
+                symbol_hint=code,
+                report_type=report_type,
+            )
+            for record in self._rows_from_result(result)
+        ]
+
+    def _run_with_session(self, operation: Callable[..., _T], *args: Any, **kwargs: Any) -> _T:
         """使用 baostock 的登录会话执行传入的同步操作。
 
         负责登录、执行 `operation`，以及在 finally 中尝试登出以释放会话。
         若登录失败，抛出 `RuntimeError`。
         """
 
-        login_result = bs.login(self.user_id, self.password, self.options)
-        if getattr(login_result, "error_code", "0") != "0":
-            raise RuntimeError(f"BaoStock login failed: {login_result.error_msg}")
+        # BaoStock SDK uses process-global session state; serialize session lifecycle.
+        with _BS_SESSION_LOCK:
+            login_result = bs.login(self.user_id, self.password, self.options)
+            if getattr(login_result, "error_code", "0") != "0":
+                raise RuntimeError(f"BaoStock login failed: {login_result.error_msg}")
 
-        try:
-            return operation()
-        finally:
             try:
-                bs.logout(self.user_id)
-            except Exception:  # noqa: BLE001
-                logger.warning("BaoStock logout failed for user=%s", self.user_id)
+                return operation(*args, **kwargs)
+            finally:
+                try:
+                    bs.logout(self.user_id)
+                except Exception:  # noqa: BLE001
+                    logger.warning("BaoStock logout failed for user=%s", self.user_id)
 
     def _rows_from_result(self, result: Any) -> list[dict[str, Any]]:
         """将 baostock 查询结果对象转换为字典列表并做值类型强转。
@@ -641,27 +795,6 @@ def _to_bool(value: Any) -> bool | None:
     if text in {"0", "false", "no", "n"}:
         return False
     return None
-
-
-def _resolve_report_types(extra: dict[str, Any]) -> tuple[str, ...]:
-    """从 `extra` 字段解析用户请求的财报类型列表，返回合法的类型元组。
-
-    若未指定则返回默认全部可用类型；若包含未知类型则抛出 `ValueError`。
-    """
-
-    requested = extra.get("report_types") if extra else None
-    if requested is None:
-        return _DEFAULT_REPORT_TYPES
-
-    if isinstance(requested, str):
-        items = [item.strip() for item in requested.split(",") if item.strip()]
-    else:
-        items = [str(item).strip() for item in requested if str(item).strip()]
-
-    invalid = [item for item in items if item not in _DEFAULT_REPORT_TYPES]
-    if invalid:
-        raise ValueError(f"BaoStock 不支持的财报类型：{invalid}")
-    return tuple(items) if items else _DEFAULT_REPORT_TYPES
 
 
 def _iter_quarters(

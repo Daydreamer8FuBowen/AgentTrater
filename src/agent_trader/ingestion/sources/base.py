@@ -35,7 +35,7 @@ class KlineDataSource(Protocol):
 class NewsDataSource(Protocol):
     async def fetch_news_unified(self, query: NewsQuery) -> NewsFetchResult: ...
 
-
+# 获取财报数据的能力协议。
 class FinancialReportDataSource(Protocol):
     async def fetch_financial_reports_unified(
         self,
