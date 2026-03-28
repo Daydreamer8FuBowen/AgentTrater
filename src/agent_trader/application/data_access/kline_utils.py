@@ -1,9 +1,20 @@
 """K 线查询辅助工具：估算 K 线条数（含交易时段感知）。"""
+
 from __future__ import annotations
 
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 
 from agent_trader.domain.models import BarInterval, ExchangeKind
+
+_CST = timezone(timedelta(hours=8))
+
+
+def _to_cst_naive(dt: datetime) -> datetime:
+    """将 datetime 统一转为 CST 无时区表示，与 A 股盘中 session 时间对齐。"""
+    if dt.tzinfo is not None:
+        return dt.astimezone(_CST).replace(tzinfo=None)
+    return dt
+
 
 MAX_KLINE_BARS = 1000
 
@@ -77,16 +88,19 @@ def _estimate_a_share_intraday_bars(
     end_time: datetime,
     interval: BarInterval,
 ) -> int:
+    # 统一转为 CST naive，与 session 时间边界（也是 CST naive）保持一致
+    start_cst = _to_cst_naive(start_time)
+    end_cst = _to_cst_naive(end_time)
     step_seconds = _INTERVAL_SECONDS[interval]
     bar_count = 0
-    day = start_time.date()
-    while day <= end_time.date():
+    day = start_cst.date()
+    while day <= end_cst.date():
         if day.weekday() < 5:
             for session_start, session_end in _A_SHARE_SESSIONS:
                 bar_count += _count_session_bars(
                     day=day,
-                    query_start=start_time,
-                    query_end=end_time,
+                    query_start=start_cst,
+                    query_end=end_cst,
                     session_start=session_start,
                     session_end=session_end,
                     step_seconds=step_seconds,
@@ -149,3 +163,28 @@ def _count_business_months(start_day: date, end_day: date) -> int:
             months.add((day.year, day.month))
         day += timedelta(days=1)
     return len(months)
+
+
+def get_bar_close_time(open_time: datetime, interval: BarInterval) -> datetime:
+    """根据 K 线开始时间和周期计算 K 线结束时间。
+
+    由于 InfluxDB 中 measurement 只记录 open_time 作为唯一时间索引，
+    close_time 可由 open_time + interval_duration 推导得出。
+
+    Args:
+        open_time: K线开始时间（UTC aware）
+        interval: K线周期
+
+    Returns:
+        K线结束时间（UTC aware）
+
+    Examples:
+        >>> open_time = datetime(2026, 3, 26, 1, 0, 0, tzinfo=timezone.utc)
+        >>> close = get_bar_close_time(open_time, BarInterval.M5)
+        >>> close == datetime(2026, 3, 26, 1, 5, 0, tzinfo=timezone.utc)
+        True
+    """
+    duration_seconds = _INTERVAL_SECONDS.get(interval)
+    if duration_seconds is None:
+        raise ValueError(f"不支持的 K线周期: {interval.value}")
+    return open_time + timedelta(seconds=duration_seconds)

@@ -13,6 +13,9 @@ from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from agent_trader.core.time import utc_now
+from agent_trader.domain.models import ExchangeKind
+
 
 def _new_identifier(prefix: str) -> str:
     """生成带前缀的唯一标识符，用作主键默认值（例如 `run_xxx`）。"""
@@ -31,15 +34,22 @@ class MongoDocument(BaseModel):
 class TimestampedDocument(MongoDocument):
     """带 `created_at` / `updated_at` 时间戳的基类文档。"""
 
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
 
 
 class AgentDefinitionDocument(TimestampedDocument):
     """Agent 定义文档（集合 `agent_definitions`）。"""
+
     collection_name: ClassVar[str] = "agent_definitions"
     primary_key: ClassVar[str] = "agent_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("agent_id", "name", "type", "description", "status")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "agent_id",
+        "name",
+        "type",
+        "description",
+        "status",
+    )
     json_fields: ClassVar[tuple[str, ...]] = (
         "skill_bindings",
         "execution_policy",
@@ -76,9 +86,16 @@ class AgentDefinitionDocument(TimestampedDocument):
 
 class SkillDefinitionDocument(TimestampedDocument):
     """Skill 定义文档（集合 `skill_definitions`）。"""
+
     collection_name: ClassVar[str] = "skill_definitions"
     primary_key: ClassVar[str] = "skill_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("skill_id", "name", "category", "description", "status")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "skill_id",
+        "name",
+        "category",
+        "description",
+        "status",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ("interfaces", "tool_policy")
     editable_fields: ClassVar[tuple[str, ...]] = (
         "name",
@@ -101,6 +118,7 @@ class SkillDefinitionDocument(TimestampedDocument):
 
 class SkillVersionDocument(TimestampedDocument):
     """Skill 版本文档（集合 `skill_versions`）。"""
+
     collection_name: ClassVar[str] = "skill_versions"
     primary_key: ClassVar[str] = "skill_version_id"
     searchable_fields: ClassVar[tuple[str, ...]] = (
@@ -150,9 +168,15 @@ class SkillVersionDocument(TimestampedDocument):
 
 class AgentReleaseDocument(TimestampedDocument):
     """Agent 发布文档（集合 `agent_releases`）。"""
+
     collection_name: ClassVar[str] = "agent_releases"
     primary_key: ClassVar[str] = "agent_release_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("agent_release_id", "agent_id", "version", "status")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "agent_release_id",
+        "agent_id",
+        "version",
+        "status",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ("graph_spec", "execution_policy")
     editable_fields: ClassVar[tuple[str, ...]] = (
         "status",
@@ -174,9 +198,14 @@ class AgentReleaseDocument(TimestampedDocument):
 
 class AgentReleasePointerDocument(TimestampedDocument):
     """记录 Agent 当前/历史发布指针（集合 `agent_release_pointers`）。"""
+
     collection_name: ClassVar[str] = "agent_release_pointers"
     primary_key: ClassVar[str] = "agent_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("agent_id", "current_release_id", "previous_release_id")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "agent_id",
+        "current_release_id",
+        "previous_release_id",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ()
     editable_fields: ClassVar[tuple[str, ...]] = (
         "current_release_id",
@@ -196,6 +225,7 @@ class TaskRunDocument(TimestampedDocument):
 
     存储任务的执行上下文、状态、执行元数据与结果摘要。
     """
+
     collection_name: ClassVar[str] = "task_runs"
     primary_key: ClassVar[str] = "run_id"
     searchable_fields: ClassVar[tuple[str, ...]] = (
@@ -207,7 +237,17 @@ class TaskRunDocument(TimestampedDocument):
         "agent.agent_id",
         "result.summary",
     )
-    json_fields: ClassVar[tuple[str, ...]] = ("trigger", "context", "agent", "graph", "execution", "metrics", "result", "error", "search_tags")
+    json_fields: ClassVar[tuple[str, ...]] = (
+        "trigger",
+        "context",
+        "agent",
+        "graph",
+        "execution",
+        "metrics",
+        "result",
+        "error",
+        "search_tags",
+    )
     editable_fields: ClassVar[tuple[str, ...]] = ("status", "result", "error", "updated_at")
 
     run_id: str = Field(default_factory=lambda: _new_identifier("run"))
@@ -226,9 +266,16 @@ class TaskRunDocument(TimestampedDocument):
 
 class TaskEventDocument(MongoDocument):
     """任务执行事件（集合 `task_events`），适合用于事件流存储与回放。"""
+
     collection_name: ClassVar[str] = "task_events"
     primary_key: ClassVar[str] = "event_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("event_id", "run_id", "event_type", "node.node_id", "skill.skill_version_id")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "event_id",
+        "run_id",
+        "event_type",
+        "node.node_id",
+        "skill.skill_version_id",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ("node", "agent", "skill", "payload", "trace")
     editable_fields: ClassVar[tuple[str, ...]] = ()
 
@@ -236,7 +283,7 @@ class TaskEventDocument(MongoDocument):
     run_id: str
     seq: int
     event_type: str
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utc_now)
     node: dict[str, Any] = Field(default_factory=dict)
     agent: dict[str, Any] = Field(default_factory=dict)
     skill: dict[str, Any] = Field(default_factory=dict)
@@ -246,9 +293,16 @@ class TaskEventDocument(MongoDocument):
 
 class TaskArtifactDocument(MongoDocument):
     """任务产物（集合 `task_artifacts`），用于存储日志、二进制或 JSON 内容。"""
+
     collection_name: ClassVar[str] = "task_artifacts"
     primary_key: ClassVar[str] = "artifact_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("artifact_id", "run_id", "node_id", "artifact_type", "content_type")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "artifact_id",
+        "run_id",
+        "node_id",
+        "artifact_type",
+        "content_type",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ("content",)
     editable_fields: ClassVar[tuple[str, ...]] = ()
 
@@ -259,14 +313,20 @@ class TaskArtifactDocument(MongoDocument):
     content_type: str = "application/json"
     content: dict[str, Any] | list[Any] | str
     size_bytes: int = 0
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class TaskCheckpointDocument(MongoDocument):
     """任务检查点（集合 `task_checkpoints`），用于保存节点级别的中间状态。"""
+
     collection_name: ClassVar[str] = "task_checkpoints"
     primary_key: ClassVar[str] = "checkpoint_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("checkpoint_id", "run_id", "node_id", "checkpoint_type")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "checkpoint_id",
+        "run_id",
+        "node_id",
+        "checkpoint_type",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ("state",)
     editable_fields: ClassVar[tuple[str, ...]] = ()
 
@@ -276,7 +336,7 @@ class TaskCheckpointDocument(MongoDocument):
     node_id: str | None = None
     checkpoint_type: str
     state: dict[str, Any] = Field(default_factory=dict)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
 
 
 class NewsDocument(TimestampedDocument):
@@ -343,12 +403,16 @@ class BasicInfoDocument(TimestampedDocument):
         "market",
         "status",
         "security_type",
+        "act_ent_type",
         "primary_source",
     )
     json_fields: ClassVar[tuple[str, ...]] = (
         "source_trace",
         "conflict_fields",
         "metadata",
+        "latest_financial_indicator",
+        "latest_income_statement",
+        "latest_valuation",
     )
     editable_fields: ClassVar[tuple[str, ...]] = (
         "name",
@@ -359,6 +423,19 @@ class BasicInfoDocument(TimestampedDocument):
         "status",
         "delist_date",
         "security_type",
+        "act_ent_type",
+        "pe_ttm",
+        "pe",
+        "pb",
+        "grossprofit_margin",
+        "netprofit_margin",
+        "roe",
+        "debt_to_assets",
+        "revenue",
+        "net_profit",
+        "latest_financial_indicator",
+        "latest_income_statement",
+        "latest_valuation",
         "primary_source",
         "source_trace",
         "conflict_fields",
@@ -375,6 +452,19 @@ class BasicInfoDocument(TimestampedDocument):
     status: str | None = None
     delist_date: datetime | None = None
     security_type: str | None = None
+    act_ent_type: str | None = None
+    pe_ttm: float | None = None
+    pe: float | None = None
+    pb: float | None = None
+    grossprofit_margin: float | None = None
+    netprofit_margin: float | None = None
+    roe: float | None = None
+    debt_to_assets: float | None = None
+    revenue: float | None = None
+    net_profit: float | None = None
+    latest_financial_indicator: dict[str, Any] | None = None
+    latest_income_statement: dict[str, Any] | None = None
+    latest_valuation: dict[str, Any] | None = None
     primary_source: str | None = None
     source_trace: list[str] = Field(default_factory=list)
     conflict_fields: list[str] = Field(default_factory=list)
@@ -445,7 +535,7 @@ class CandidateDocument(MongoDocument):
     status: str = "active"
     score: float = 0.0
     audit_ids: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     deprecated_at: datetime | None = None
     tags: list[str] = Field(default_factory=list)
     notes: str | None = None
@@ -486,7 +576,7 @@ class PositionDocument(MongoDocument):
     position_ratio: float = 0.0
     position_cost: float = 0.0
     audit_ids: list[str] = Field(default_factory=list)
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
     deprecated_at: datetime | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -494,60 +584,32 @@ class PositionDocument(MongoDocument):
 class KlineSyncStateDocument(MongoDocument):
     """K 线同步状态文档（集合 `kline_sync_states`）。
 
-    每个 (symbol, market, interval) 组合维护一条记录，追踪拉取进度与健康状态。
+    每个 (symbol, market, interval) 组合维护一条记录，追踪最近一次成功同步到的 bar 起始时间。
     """
 
     collection_name: ClassVar[str] = "kline_sync_states"
     primary_key: ClassVar[str] = "state_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("state_id", "symbol", "market", "interval", "status")
+    searchable_fields: ClassVar[tuple[str, ...]] = (
+        "state_id",
+        "symbol",
+        "market",
+        "interval",
+        "status",
+    )
     json_fields: ClassVar[tuple[str, ...]] = ()
     editable_fields: ClassVar[tuple[str, ...]] = (
         "last_bar_time",
         "last_fetched_at",
-        "lag_seconds",
-        "consecutive_failures",
         "status",
         "updated_at",
     )
 
     state_id: str = Field(default_factory=lambda: _new_identifier("kss"))
     symbol: str
-    market: str
+    market: ExchangeKind
     interval: str  # "1d" | "5m"
     last_bar_time: datetime | None = None
     last_fetched_at: datetime | None = None
-    lag_seconds: float = 0.0
-    consecutive_failures: int = 0
-    status: str = "ok"  # "ok" | "lagging" | "failed"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-
-
-class BackfillProgressDocument(MongoDocument):
-    """历史回补进度文档（集合 `backfill_progress`）。
-
-    按 (market, interval, tier) 维护一条进度记录，通过 cursor 支持断点续跑。
-    """
-
-    collection_name: ClassVar[str] = "backfill_progress"
-    primary_key: ClassVar[str] = "progress_id"
-    searchable_fields: ClassVar[tuple[str, ...]] = ("progress_id", "market", "interval", "tier", "status")
-    json_fields: ClassVar[tuple[str, ...]] = ()
-    editable_fields: ClassVar[tuple[str, ...]] = (
-        "cursor",
-        "completion_ratio",
-        "status",
-        "updated_at",
-    )
-
-    progress_id: str = Field(default_factory=lambda: _new_identifier("bfp"))
-    market: str
-    interval: str  # "1d" | "5m"
-    tier: str  # "AB" | "ABC"
-    target_start: datetime
-    target_end: datetime
-    cursor: datetime | None = None  # 当前回补进度指针
-    completion_ratio: float = 0.0
-    status: str = "pending"  # "pending" | "running" | "completed" | "failed"
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    status: str = "ok"  # "ok" | "failed"
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)

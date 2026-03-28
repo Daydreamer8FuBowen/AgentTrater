@@ -1,26 +1,33 @@
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from agent_trader.application.data_access.gateway import DataAccessGateway, DataSourceRegistry, SourceSelectionAdapter
-from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
 from agent_trader.api.routes.charts import router as charts_router
 from agent_trader.api.routes.data import router as data_router
+from agent_trader.api.routes.data_sources import router as data_sources_router
 from agent_trader.api.routes.health import router as health_router
 from agent_trader.api.routes.symbols import router as symbols_router
+from agent_trader.application.data_access.gateway import (
+    DataAccessGateway,
+    DataSourceRegistry,
+    SourceSelectionAdapter,
+)
+from agent_trader.application.services.basic_info_aggregation_service import (
+    BasicInfoAggregationService,
+)
 from agent_trader.core.config import get_settings
-from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.core.logging import configure_logging
+from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.ingestion.sources.baostock_source import BaoStockSource
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
+from agent_trader.storage.connection_manager import AppConnectionManager
 from agent_trader.storage.mongo import MongoUnitOfWork
 from agent_trader.storage.mongo.documents import BasicInfoDocument
 from agent_trader.storage.mongo.repository import MongoSourcePriorityRepository
-from agent_trader.storage.connection_manager import AppConnectionManager
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +37,14 @@ def _build_source_registry() -> DataSourceRegistry:
     settings = get_settings()
     registry = DataSourceRegistry()
 
-    # BaoStock 使用公开账号也可用，默认总是注册。
-    registry.register(BaoStockSource.from_settings(settings))
-
-    # TuShare 依赖 token，仅在显式配置时注册。
+    # TuShare 依赖 token，仅在显式配置时注册；若可用则置于优先级链首位。
     if settings.tushare.token:
         registry.register(TuShareSource.from_settings(settings))
     else:
         logger.info("TUSHARE_TOKEN 未设置，跳过 TuShareSource 注册")
+
+    # BaoStock 使用公开账号也可用，默认总是注册（通常作为回退源）。
+    registry.register(BaoStockSource.from_settings(settings))
 
     return registry
 
@@ -123,7 +130,9 @@ async def _bootstrap_basic_info_symbols_if_empty(
 
     existing = await database[BasicInfoDocument.collection_name].find_one({}, {"_id": 1})
     if existing is not None:
-        logger.info("basic_info symbol 引导跳过：集合 %s 已存在数据", BasicInfoDocument.collection_name)
+        logger.info(
+            "basic_info symbol 引导跳过：集合 %s 已存在数据", BasicInfoDocument.collection_name
+        )
         return
 
     try:
@@ -156,11 +165,15 @@ async def lifespan(app: FastAPI):
     app.state.source_registry = source_registry
 
     if settings.data_routing.enabled:
-        await _rebuild_default_source_priorities(connections.mongo_manager.database, source_registry)
+        await _rebuild_default_source_priorities(
+            connections.mongo_manager.database, source_registry
+        )
     else:
         logger.info("数据路由引导已禁用（由 DATA_ROUTING_ENABLED 控制）")
 
-    await _bootstrap_basic_info_symbols_if_empty(connections.mongo_manager.database, source_registry)
+    await _bootstrap_basic_info_symbols_if_empty(
+        connections.mongo_manager.database, source_registry
+    )
 
     try:
         yield
@@ -175,6 +188,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title=settings.app_name, lifespan=lifespan)
     app.include_router(health_router)
     app.include_router(data_router, prefix="/api/v1")
+    app.include_router(data_sources_router, prefix="/api/v1")
     app.include_router(symbols_router, prefix="/api/v1")
     app.include_router(charts_router, prefix="/api/v1")
     return app

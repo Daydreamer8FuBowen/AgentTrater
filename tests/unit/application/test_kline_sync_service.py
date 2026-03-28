@@ -1,34 +1,44 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pytest
 
-# 被测服务与相关模型配置
-from agent_trader.application.services.kline_sync_service import KlineSyncService, TierCollectionService, TieredSymbols
+from agent_trader.application.jobs import kline_sync as kline_sync_module
+from agent_trader.application.jobs.kline_sync import (
+    KlineSyncService,
+    TierCollectionService,
+    TieredSymbols,
+)
 from agent_trader.core.config import KlineSyncConfig
+from agent_trader.core.time import market_time_to_utc, to_market_time
 from agent_trader.domain.models import BarInterval, ExchangeKind
-from agent_trader.ingestion.models import DataCapability, DataRouteKey, KlineFetchResult
-# 测试用的内存 UoW / 事件存储
+from agent_trader.ingestion.models import (
+    DataCapability,
+    DataRouteKey,
+    KlineFetchResult,
+    KlineRecord,
+)
 from support.in_memory_uow import InMemoryEventStore, InMemoryUnitOfWork
 
 
-# 一个简单的 Gateway stub：用于模拟 fetch_klines 返回指定结果，并记录调用参数
 class _StubGateway:
-    def __init__(self, result: KlineFetchResult) -> None:
+    def __init__(self, result: KlineFetchResult, *, should_raise: bool = False) -> None:
         self._result = result
-        self.calls: list[object] = []  # 记录被调用时传入的 query
+        self._should_raise = should_raise
+        self.calls: list[object] = []
 
     async def fetch_klines(self, query: object) -> KlineFetchResult:
         self.calls.append(query)
+        if self._should_raise:
+            raise RuntimeError("mock fetch failure")
         return self._result
 
 
-# 一个简单的内存 candles 存储，用于检查写入的批次
 class _InMemoryCandleRepository:
     def __init__(self) -> None:
-        self.batches: list[list[object]] = []  # 每次 write / write_batch 会把数据加入此列表
+        self.batches: list[list[object]] = []
 
     async def write(self, candle: object) -> None:
         self.batches.append([candle])
@@ -37,7 +47,6 @@ class _InMemoryCandleRepository:
         self.batches.append(candles)
 
 
-# Tier 服务的 stub：直接返回预设的 tiers，方便测试分层逻辑
 class _StubTierService:
     def __init__(self, tiers: TieredSymbols) -> None:
         self._tiers = tiers
@@ -46,11 +55,9 @@ class _StubTierService:
         return self._tiers
 
 
-# 测试：TierCollectionService 应能把 positions / candidates / others 划分到 A/B/C
 @pytest.mark.asyncio
 async def test_tier_collection_service_split_abc() -> None:
     store = InMemoryEventStore()
-    # 在内存 store 中预置 positions（持仓）和 candidates（候选）数据
     store.positions = [
         SimpleNamespace(symbol="600000.SH"),
         SimpleNamespace(symbol="600051.SH"),
@@ -63,68 +70,55 @@ async def test_tier_collection_service_split_abc() -> None:
         SimpleNamespace(symbol="600053.SH"),
         SimpleNamespace(symbol="000002.SZ"),
     ]
-    # basic_info_items 同时作为 Tier 白名单，SH/SZ 市场需要额外过滤 status/security_type/ST。
     store.basic_info_items = {
-        "600000.SH": SimpleNamespace(symbol="600000.SH", market="sh", status="1", security_type="stock", name="浦发银行"),
-        "600010.SH": SimpleNamespace(symbol="600010.SH", market="sh", status="1", security_type="stock", name="包钢股份"),
-        "600050.SH": SimpleNamespace(symbol="600050.SH", market="sh", status="1", security_type="stock", name="中国联通"),
-        "600051.SH": SimpleNamespace(symbol="600051.SH", market="sh", status="0", security_type="stock", name="停牌示例"),
-        "600052.SH": SimpleNamespace(symbol="600052.SH", market="sh", status="1", security_type="fund", name="示例基金"),
-        "600053.SH": SimpleNamespace(symbol="600053.SH", market="sh", status="1", security_type="stock", name="ST示例"),
-        "000001.SZ": SimpleNamespace(symbol="000001.SZ", market="sz", status="1", security_type="stock", name="平安银行"),
-        "000002.SZ": SimpleNamespace(symbol="000002.SZ", market="sz", status="1", security_type="stock", name="万科A"),
-    }
+            "600000.SH": SimpleNamespace(
+                symbol="600000.SH", market=ExchangeKind.SSE, status="1", security_type="stock", name="浦发银行"
+            ),
+            "600010.SH": SimpleNamespace(
+                symbol="600010.SH", market=ExchangeKind.SSE, status="1", security_type="stock", name="包钢股份"
+            ),
+            "600050.SH": SimpleNamespace(
+                symbol="600050.SH", market=ExchangeKind.SSE, status="1", security_type="stock", name="中国联通"
+            ),
+            "600051.SH": SimpleNamespace(
+                symbol="600051.SH", market=ExchangeKind.SSE, status="0", security_type="stock", name="停牌示例"
+            ),
+            "600052.SH": SimpleNamespace(
+                symbol="600052.SH", market=ExchangeKind.SSE, status="1", security_type="fund", name="示例基金"
+            ),
+            "600053.SH": SimpleNamespace(
+                symbol="600053.SH", market=ExchangeKind.SSE, status="1", security_type="stock", name="ST示例"
+            ),
+            "000001.SZ": SimpleNamespace(
+                symbol="000001.SZ", market=ExchangeKind.SZSE, status="1", security_type="stock", name="平安银行"
+            ),
+            "000002.SZ": SimpleNamespace(
+                symbol="000002.SZ", market=ExchangeKind.SZSE, status="1", security_type="stock", name="万科A"
+            ),
+        }
 
-    # 用内存 UoW 构造 TierCollectionService 并执行 collect
     service = TierCollectionService(uow_factory=lambda: InMemoryUnitOfWork(store=store))
-    tiers = await service.collect("sse")
+    tiers = await service.collect(ExchangeKind.SSE)
 
-    # 断言：market 被传递并标准化，positions/candidates/others 被正确分组
-    assert tiers.market == "sse"
+    assert tiers.market == ExchangeKind.SSE
     assert tiers.positions == ("600000.SH",)
     assert tiers.candidates == ("600010.SH",)
     assert tiers.others == ("600050.SH",)
 
 
 @pytest.mark.asyncio
-async def test_tier_collection_service_applies_market_specific_basic_info_filters_for_sz() -> None:
+async def test_sync_realtime_m5_positions_uses_latest_completed_bar() -> None:
     store = InMemoryEventStore()
-    store.positions = [
-        SimpleNamespace(symbol="000001.SZ"),
-        SimpleNamespace(symbol="000003.SZ"),
-    ]
-    store.candidates = [
-        SimpleNamespace(symbol="000002.SZ"),
-        SimpleNamespace(symbol="000004.SZ"),
-        SimpleNamespace(symbol="600000.SH"),
-    ]
-    store.basic_info_items = {
-        "000001.SZ": SimpleNamespace(symbol="000001.SZ", market="sz", status="1", security_type="stock", name="平安银行"),
-        "000002.SZ": SimpleNamespace(symbol="000002.SZ", market="sz", status="1", security_type="stock", name="万科A"),
-        "000003.SZ": SimpleNamespace(symbol="000003.SZ", market="sz", status="0", security_type="stock", name="停牌示例"),
-        "000004.SZ": SimpleNamespace(symbol="000004.SZ", market="sz", status="1", security_type="stock", name="ST示例"),
-        "000005.SZ": SimpleNamespace(symbol="000005.SZ", market="sz", status="1", security_type="fund", name="示例ETF"),
-        "000006.SZ": SimpleNamespace(symbol="000006.SZ", market="sz", status="1", security_type="stock", name="招商地产"),
-        "600000.SH": SimpleNamespace(symbol="600000.SH", market="sh", status="1", security_type="stock", name="浦发银行"),
-    }
-
-    service = TierCollectionService(uow_factory=lambda: InMemoryUnitOfWork(store=store))
-    tiers = await service.collect("szse")
-
-    assert tiers.market == "szse"
-    assert tiers.positions == ("000001.SZ",)
-    assert tiers.candidates == ("000002.SZ",)
-    assert tiers.others == ("000006.SZ",)
-
-
-# 测试：当实时 M5 同步对 positions 调用数据源得到空 payload（周内工作日无数据）时，
-# 服务应生成“synthetic_zero_fill” 的合成 K 线并写入 candles（零值填充）
-@pytest.mark.asyncio
-async def test_sync_realtime_m5_positions_workday_empty_payload_zero_fill() -> None:
-    store = InMemoryEventStore()
+    store.basic_info_items["600000.SH"] = SimpleNamespace(
+        symbol="600000.SH",
+        market=ExchangeKind.SSE,
+        status="1",
+        security_type="stock",
+        name="浦发银行",
+        primary_source="baostock",
+        source_trace=["tushare"],
+    )
     uow = InMemoryUnitOfWork(store=store)
-
-    # 模拟 gateway 返回空的 payload（即没有真实 K 线数据）
     gateway = _StubGateway(
         KlineFetchResult(
             source="stub",
@@ -133,28 +127,50 @@ async def test_sync_realtime_m5_positions_workday_empty_payload_zero_fill() -> N
                 market=ExchangeKind.SSE,
                 interval=BarInterval.M5,
             ),
-            payload=[],  # 空结果，触发 zero-fill 分支
+            payload=[
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 23, 9, 30, 0), ExchangeKind.SSE),
+                    interval="5m",
+                    open=10.0,
+                    high=10.5,
+                    low=9.9,
+                    close=10.2,
+                    volume=1000.0,
+                    amount=10000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                ),
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 23, 9, 35, 0), ExchangeKind.SSE),
+                    interval="5m",
+                    open=10.2,
+                    high=10.6,
+                    low=10.1,
+                    close=10.4,
+                    volume=800.0,
+                    amount=9000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                ),
+            ],
         )
     )
     candles = _InMemoryCandleRepository()
-    # Tier 服务返回只有一个 position，便于断言只对该 symbol 进行同步
     tier_service = _StubTierService(
-        TieredSymbols(
-            market="sse",
-            positions=("600000.SH",),
-            candidates=(),
-            others=(),
-        )
+        TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
     )
 
-    # 构造 KlineSyncService，使用内存 UoW、stub gateway、内存 candles，以及固定的 now（周一）
     service = KlineSyncService(
         gateway=gateway,
         candle_repository=candles,
         uow_factory=lambda: uow,
         tier_collection_service=tier_service,
         config=KlineSyncConfig(
-            enabled_markets=["sse"],
+            enabled_markets=[ExchangeKind.SSE],
             d1_window_days=730,
             m5_window_days=60,
             realtime_m5_interval_seconds=60,
@@ -162,26 +178,403 @@ async def test_sync_realtime_m5_positions_workday_empty_payload_zero_fill() -> N
             backfill_batch_symbols=20,
             m5_backfill_chunk_days=20,
         ),
-        now_provider=lambda: datetime(2026, 3, 23, 10, 1, 0),  # Monday（工作日）
+        now_provider=lambda: datetime(2026, 3, 23, 1, 43, 0, tzinfo=timezone.utc),
     )
 
-    # 执行同步（仅 positions 的实时 M5 同步）
-    summary = await service.sync_realtime_m5_positions("sse")
+    summary = await service.sync_realtime_m5_positions(ExchangeKind.SSE)
 
-    # 断言：summary 表示有 1 个同步（synced），没有失败；gateway 被调用一次
     assert summary["synced"] == 1
     assert summary["failed"] == 0
-    assert len(gateway.calls) == 1
-    # candles 仓库应写入一批数据（一次 batch），并且该 batch 包含两条 candle：
-    # - 一条为合成的零填充 bar（时间点与窗口相关）
-    # - 另一条可能为 position 的 marker（实现细节取决于服务）
+    query = gateway.calls[0]
+    assert query.start_time == market_time_to_utc(datetime(2026, 3, 23, 9, 30, 0), ExchangeKind.SSE)
+    assert query.end_time == market_time_to_utc(datetime(2026, 3, 23, 9, 35, 0), ExchangeKind.SSE)
+    assert query.extra["available_sources"] == ["baostock", "tushare"]
     assert len(candles.batches) == 1
-    assert len(candles.batches[0]) == 2
-    # 验证写入的所有条目都来源于 synthetic_zero_fill（服务为无数据情况生成的标记）
-    assert all(item.source == "synthetic_zero_fill" for item in candles.batches[0])
-    # 验证合成的 K 线确实为零值（open/high/low/close/volume 均为 0.0）
-    assert all(item.open_price == 0.0 for item in candles.batches[0])
-    assert all(item.high_price == 0.0 for item in candles.batches[0])
-    assert all(item.low_price == 0.0 for item in candles.batches[0])
-    assert all(item.close_price == 0.0 for item in candles.batches[0])
-    assert all(item.volume == 0.0 for item in candles.batches[0])
+    assert store.kline_sync_states["600000.SH:sse:5m"]["last_bar_time"] == market_time_to_utc(
+        datetime(2026, 3, 23, 9, 35, 0), ExchangeKind.SSE
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_realtime_m5_positions_skips_before_first_completed_bar() -> None:
+    store = InMemoryEventStore()
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.M5,
+            ),
+            payload=[],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 23, 1, 31, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_realtime_m5_positions(ExchangeKind.SSE)
+
+    assert summary["mode"] == "await_bar_close"
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_backfill_m5_uses_state_to_resume() -> None:
+    store = InMemoryEventStore()
+    store.kline_sync_states["600000.SH:sse:5m"] = {
+        "state_id": "600000.SH:sse:5m",
+        "symbol": "600000.SH",
+        "market": ExchangeKind.SSE,
+        "interval": "5m",
+        "last_bar_time": market_time_to_utc(datetime(2026, 3, 20, 14, 55, 0), ExchangeKind.SSE),
+        "last_fetched_at": None,
+        "status": "ok",
+    }
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.M5,
+            ),
+            payload=[
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 24, 15, 0, 0), ExchangeKind.SSE),
+                    interval="5m",
+                    open=10.0,
+                    high=10.2,
+                    low=9.8,
+                    close=10.1,
+                    volume=100.0,
+                    amount=1000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                )
+            ],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 24, 8, 0, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_backfill_m5_positions_candidates(ExchangeKind.SSE)
+
+    assert summary["synced"] == 1
+    query = gateway.calls[0]
+    assert query.start_time == market_time_to_utc(datetime(2026, 3, 20, 15, 0, 0), ExchangeKind.SSE)
+    assert query.end_time == market_time_to_utc(datetime(2026, 3, 24, 15, 0, 0), ExchangeKind.SSE)
+
+
+@pytest.mark.asyncio
+async def test_sync_market_routes_to_history_outside_trading_hours() -> None:
+    store = InMemoryEventStore()
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.D1,
+            ),
+            payload=[
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 26, 9, 0, 0), ExchangeKind.SSE),
+                    interval="1d",
+                    open=10.0,
+                    high=10.5,
+                    low=9.8,
+                    close=10.2,
+                    volume=1000.0,
+                    amount=10000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                )
+            ],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 26, 8, 0, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_market(ExchangeKind.SSE)
+
+    assert summary["mode"] == "history"
+    assert summary["history"]["1d"]["synced"] == 1
+
+
+@pytest.mark.asyncio
+async def test_d1_history_during_trading_uses_previous_trade_day() -> None:
+    store = InMemoryEventStore()
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.D1,
+            ),
+            payload=[
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 25, 9, 0, 0), ExchangeKind.SSE),
+                    interval="1d",
+                    open=10.0,
+                    high=10.5,
+                    low=9.8,
+                    close=10.2,
+                    volume=1000.0,
+                    amount=10000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                )
+            ],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 26, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_backfill_d1_all(ExchangeKind.SSE)
+
+    assert summary["synced"] == 1
+    assert store.kline_sync_states["600000.SH:sse:1d"]["last_bar_time"] == market_time_to_utc(
+        datetime(2026, 3, 25, 9, 0, 0), ExchangeKind.SSE
+    )
+
+
+@pytest.mark.asyncio
+async def test_sync_backfill_d1_all_processes_all_symbols_without_batch_selection() -> None:
+    store = InMemoryEventStore()
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.D1,
+            ),
+            payload=[
+                KlineRecord(
+                    symbol="600000.SH",
+                    bar_time=market_time_to_utc(datetime(2026, 3, 26, 9, 0, 0), ExchangeKind.SSE),
+                    interval="1d",
+                    open=10.0,
+                    high=10.5,
+                    low=9.8,
+                    close=10.2,
+                    volume=1000.0,
+                    amount=10000.0,
+                    change_pct=None,
+                    turnover_rate=None,
+                    adjusted=True,
+                )
+            ],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(
+                market=ExchangeKind.SSE,
+                positions=("600000.SH", "600001.SH"),
+                candidates=("600002.SH",),
+                others=("600003.SH",),
+            )
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=2,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 27, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_backfill_d1_all(ExchangeKind.SSE)
+
+    assert summary["synced"] == 4
+    assert len(gateway.calls) == 4
+
+
+@pytest.mark.asyncio
+async def test_sync_backfill_d1_skips_api_when_state_already_latest_by_date() -> None:
+    store = InMemoryEventStore()
+    store.kline_sync_states["600000.SH:sse:1d"] = {
+        "state_id": "600000.SH:sse:1d",
+        "symbol": "600000.SH",
+        "market": ExchangeKind.SSE,
+        "interval": "1d",
+        "last_bar_time": market_time_to_utc(datetime(2026, 3, 26, 9, 0, 0), ExchangeKind.SSE),
+        "last_fetched_at": datetime(2026, 3, 26, 10, 0, 0, tzinfo=timezone.utc),
+        "status": "ok",
+    }
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.D1,
+            ),
+            payload=[],
+        )
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 27, 2, 0, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_backfill_d1_all(ExchangeKind.SSE)
+
+    assert summary["synced"] == 0
+    assert summary["skipped"] == 1
+    assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+async def test_sync_realtime_fetch_error_is_logged_and_skipped() -> None:
+    store = InMemoryEventStore()
+    uow = InMemoryUnitOfWork(store=store)
+    gateway = _StubGateway(
+        KlineFetchResult(
+            source="stub",
+            route_key=DataRouteKey(
+                capability=DataCapability.KLINE,
+                market=ExchangeKind.SSE,
+                interval=BarInterval.M5,
+            ),
+            payload=[],
+        ),
+        should_raise=True,
+    )
+    service = KlineSyncService(
+        gateway=gateway,
+        candle_repository=_InMemoryCandleRepository(),
+        uow_factory=lambda: uow,
+        tier_collection_service=_StubTierService(
+            TieredSymbols(market=ExchangeKind.SSE, positions=("600000.SH",), candidates=(), others=())
+        ),
+        config=KlineSyncConfig(
+            enabled_markets=[ExchangeKind.SSE],
+            d1_window_days=730,
+            m5_window_days=60,
+            realtime_m5_interval_seconds=60,
+            d1_sync_hour=17,
+            backfill_batch_symbols=20,
+            m5_backfill_chunk_days=20,
+        ),
+        now_provider=lambda: datetime(2026, 3, 23, 2, 35, 0, tzinfo=timezone.utc),
+    )
+
+    summary = await service.sync_realtime_m5_positions(ExchangeKind.SSE)
+
+    assert summary["synced"] == 0
+    assert summary["failed"] == 0
+    assert summary["skipped"] == 1
+    assert store.kline_sync_states["600000.SH:sse:5m"]["status"] == "failed"
+
+
+def test_latest_completed_d1_on_weekend_uses_friday_for_a_share() -> None:
+    now = datetime(2026, 3, 28, 4, 0, 0, tzinfo=timezone.utc)
+    target = kline_sync_module._latest_completed_bar_start(now, ExchangeKind.SSE, BarInterval.D1)
+    assert target is not None
+    assert to_market_time(target, ExchangeKind.SSE).date().weekday() == 4
+
+
+def test_latest_completed_d1_on_weekend_keeps_weekend_for_weekend_trading_market() -> None:
+    now = datetime(2026, 3, 28, 4, 0, 0, tzinfo=timezone.utc)
+    target = kline_sync_module._latest_completed_bar_start(now, "binance", BarInterval.D1)
+    assert target is not None
+    assert to_market_time(target, "binance").date() == to_market_time(now, "binance").date()

@@ -10,7 +10,7 @@ rs = bs.query_history_k_data_plus(
     start_date="2024-01-02",
     end_date="2024-01-05",
     frequency="5",
-    adjustflag="3"   # 先用不复权，便于排查
+    adjustflag="3",  # 先用不复权，便于排查
 )
 
 print("query:", rs.error_code, rs.error_msg)

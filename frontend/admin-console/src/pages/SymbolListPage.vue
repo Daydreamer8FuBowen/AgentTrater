@@ -5,6 +5,7 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { fetchSymbolMonitor, type SymbolMonitorItem } from '../api/symbolsApi'
+import { formatDateTime, formatRelativeTime } from '../utils/datetime'
 
 const router = useRouter()
 const loading = ref(false)
@@ -52,17 +53,6 @@ function formatPercent(ratio: number): number {
   return Math.max(0, Math.min(100, Math.round((ratio || 0) * 100)))
 }
 
-function formatDateTime(value: string | null): string {
-  if (!value) {
-    return '暂无'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '暂无'
-  }
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`
-}
-
 function statusTagType(status: string): 'success' | 'warning' | 'danger' | 'info' {
   if (status === 'ok') {
     return 'success'
@@ -87,24 +77,7 @@ function progressStatusType(status: string): 'success' | 'warning' | 'exception'
 }
 
 function formatRelative(value: string | null): string {
-  if (!value) {
-    return '未同步'
-  }
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) {
-    return '未同步'
-  }
-  const deltaSeconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000))
-  if (deltaSeconds < 60) {
-    return `${deltaSeconds}s 前`
-  }
-  if (deltaSeconds < 3600) {
-    return `${Math.floor(deltaSeconds / 60)}m 前`
-  }
-  if (deltaSeconds < 86400) {
-    return `${Math.floor(deltaSeconds / 3600)}h 前`
-  }
-  return `${Math.floor(deltaSeconds / 86400)}d 前`
+  return formatRelativeTime(value)
 }
 
 async function loadData() {

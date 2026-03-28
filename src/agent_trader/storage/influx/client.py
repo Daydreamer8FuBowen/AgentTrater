@@ -4,6 +4,7 @@ from influxdb_client import InfluxDBClient
 
 from agent_trader.core.config import InfluxConfig
 
+
 def create_influx_client(config: InfluxConfig) -> InfluxDBClient:
     """根据统一配置创建 InfluxDB 客户端。"""
 

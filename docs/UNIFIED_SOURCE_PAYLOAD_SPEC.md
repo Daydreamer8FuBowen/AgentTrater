@@ -10,6 +10,7 @@
 - provider 原生字段只允许在 source 内部映射时使用，不允许泄漏到统一接口的返回值中。
 - 协议层约束：`basic_info` 必须作为 `KlineDataSource` 的绑定能力出现（提供 K 线能力的 source 必须同时实现 `fetch_basic_info`）。
 - 能力声明约束：`basic_info` 不再使用独立 capability，统一归属 `DataCapability.KLINE`。
+- 当前 sources 实现范围包含 `kline/basic_info` 和 `company_detail`，不包含 `news/financial_report`。
 
 ## Kline 记录
 
@@ -38,6 +39,15 @@
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `is_trading` | `bool \\| None` | 是否处于可交易状态；无此信息时可为 `None` |
+
+### 时间与 symbol 规则
+
+- `KlineQuery.start_time/end_time` 输入必须是 UTC 时间并精确到分钟（秒与微秒为 0）。
+- source 内部可以按市场时区换算为 provider 查询参数。
+- `KlineRecord.bar_time` 输出必须是 UTC，且语义为 bar 开始时间。
+- A 股 `1d` 的 `bar_time` 必须按北京时间 `09:30` 对齐后转换为 UTC。
+- A 股 symbol 对外统一为 `000001.SZ` / `600000.SH` 格式，由各 source 内部完成 provider 适配。
+- `fetch_klines_unified` 的 `payload` 必须按 `KlineRecord.bar_time` 递增排序（从旧到新）。
 
 ## Basic Info 记录
 
@@ -109,45 +119,55 @@ BaoStock 的 `query_stock_basic()` 返回常见字段：
 	  - 向后兼容时可保持 `schema_version = v1`；
 	  - 若改动已有符号语义或删除值域，需升级 `schema_version`。
 
-## News 记录
+## Company Valuation 记录
 
-- `data_kind`: `news`
-- 适用接口：`fetch_news_unified`
-
-### 必填字段
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `published_at` | `datetime \\| None` | 发布时间 |
-| `title` | `str` | 标题 |
-| `content` | `str` | 正文/摘要 |
-| `source_channel` | `str` | 新闻来源渠道 |
-| `url` | `str \\| None` | 原始链接 |
-| `symbols` | `list[str]` | 关联证券代码列表 |
-
-## Financial Report 记录
-
-- `data_kind`: `financial_report`
-- 适用接口：`fetch_financial_reports_unified`
+- `data_kind`: `company_valuation`
+- 适用接口：`fetch_company_valuation_unified`
 
 ### 必填字段
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
-| `symbol` | `str` | 统一证券代码 |
-| `report_type` | `str` | 报表类型，例如 `profit`、`forecast` |
-| `report_date` | `datetime \\| None` | 报告日期 |
-| `published_at` | `datetime \\| None` | 公告日期 |
-| `report_year` | `int \\| None` | 报告年度 |
-| `report_quarter` | `int \\| None` | 报告季度 |
-| `metrics` | `dict[str, object]` | 剩余指标字段的统一容器 |
+| `trade_date` | `datetime \\| None` | 交易日期（UTC时间，与日线对齐） |
+| `pe_ttm` | `float \\| None` | 滚动市盈率 |
+| `pe` | `float \\| None` | 市盈率 |
+| `pb` | `float \\| None` | 市净率 |
+
+## Company Financial Indicator 记录
+
+- `data_kind`: `company_financial_indicator`
+- 适用接口：`fetch_company_financial_indicators_unified`
+
+### 必填字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `report_date` | `datetime \\| None` | 财报日期（UTC时间） |
+| `grossprofit_margin` | `float \\| None` | 销售毛利率 |
+| `netprofit_margin` | `float \\| None` | 销售净利率 |
+| `roe` | `float \\| None` | 净资产收益率 |
+| `debt_to_assets` | `float \\| None` | 资产负债率 |
+
+## Company Income Statement 记录
+
+- `data_kind`: `company_income_statement`
+- 适用接口：`fetch_company_income_statements_unified`
+
+### 必填字段
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `report_date` | `datetime \\| None` | 财报日期（UTC时间） |
+| `total_revenue` | `float \\| None` | 营业总收入 |
+| `total_operate_costs` | `float \\| None` | 营业总成本 |
+| `operate_profit` | `float \\| None` | 营业利润 |
+| `total_profit` | `float \\| None` | 利润总额 |
+| `net_profit` | `float \\| None` | 净利润 |
 
 ## 路由与元数据约束
 
 - `fetch_klines_unified` 返回的 `route_key.capability` 必须为 `DataCapability.KLINE`。
 - `fetch_basic_info` 返回的 `route_key.capability` 必须为 `DataCapability.KLINE`（`interval=None`）。
-- `fetch_news_unified` 返回的 `route_key.capability` 必须为 `DataCapability.NEWS`。
-- `fetch_financial_reports_unified` 返回的 `route_key.capability` 必须为 `DataCapability.FINANCIAL_REPORT`。
 - `route_key.market` 应保留调用方传入的市场维度，不能在 source 内被静默清空。
 - `metadata["count"]` 必须等于 `len(payload)`。
 

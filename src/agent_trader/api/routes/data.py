@@ -7,11 +7,22 @@ from typing import Any, Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from agent_trader.api.dependencies import get_basic_info_aggregation_service, get_data_access_gateway
+from agent_trader.api.dependencies import (
+    get_basic_info_aggregation_service,
+    get_data_access_gateway,
+)
+from agent_trader.api.time_serialization import serialize_temporal_payload
 from agent_trader.application.data_access.gateway import DataAccessGateway
-from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
+from agent_trader.application.services.basic_info_aggregation_service import (
+    BasicInfoAggregationService,
+)
 from agent_trader.domain.models import BarInterval, ExchangeKind
-from agent_trader.ingestion.models import DataFetchResult, FinancialReportQuery, KlineQuery, NewsQuery
+from agent_trader.ingestion.models import (
+    DataFetchResult,
+    FinancialReportQuery,
+    KlineQuery,
+    NewsQuery,
+)
 
 router = APIRouter(prefix="/data", tags=["data"])
 
@@ -76,6 +87,16 @@ class BasicInfoRecordResponse(BaseModel):
     status: str | None = None
     delist_date: datetime | None = None
     security_type: str | None = None
+    act_ent_type: str | None = None
+    pe_ttm: float | None = None
+    pe: float | None = None
+    pb: float | None = None
+    grossprofit_margin: float | None = None
+    netprofit_margin: float | None = None
+    roe: float | None = None
+    debt_to_assets: float | None = None
+    revenue: float | None = None
+    net_profit: float | None = None
 
 
 class NewsRecordResponse(BaseModel):
@@ -159,8 +180,8 @@ class BasicInfoRefreshResponse(BaseModel):
 
 def _serialize_payload_item(item: Any) -> Any:
     if is_dataclass(item):
-        return asdict(item)
-    return item
+        return serialize_temporal_payload(asdict(item))
+    return serialize_temporal_payload(item)
 
 
 def _serialize_fetch_result(result: DataFetchResult) -> dict[str, Any]:
@@ -174,9 +195,9 @@ def _serialize_fetch_result(result: DataFetchResult) -> dict[str, Any]:
         },
         "data_kind": result.data_kind,
         "schema_version": result.schema_version,
-        "fetched_at": result.fetched_at,
+        "fetched_at": serialize_temporal_payload(result.fetched_at),
         "payload": [_serialize_payload_item(item) for item in result.payload],
-        "metadata": result.metadata,
+        "metadata": serialize_temporal_payload(result.metadata),
     }
 
 

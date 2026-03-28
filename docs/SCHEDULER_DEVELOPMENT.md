@@ -96,13 +96,14 @@ scheduler.add_job(
 
 示例：
 
-当前实现中，任务由 `register_kline_sync_jobs(...)` 统一注册，包含：
+当前实现中，任务由 `register_kline_sync_jobs(...)` 和 `register_company_detail_sync_jobs(...)` 统一注册，包含：
 
 - 实时 5m 持仓同步
 - 实时 5m 候选同步
 - 每日 D1 同步
 - 非交易时段 D1 回补
 - 非交易时段 M5 回补
+- 每日股票详情同步 (市盈率、财报、利润等)
 
 ## 4. 与 FastAPI 生命周期的关系
 

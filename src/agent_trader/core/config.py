@@ -112,13 +112,13 @@ class KlineSyncConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    enabled_markets: list[str]          # 启用同步的市场列表，如 ["sse", "szse"]
-    d1_window_days: int                 # D1 历史回补窗口（天），默认 730
-    m5_window_days: int                 # M5 历史回补窗口（天），默认 60
-    realtime_m5_interval_seconds: int   # 实时 5m 拉取间隔（秒），默认 60
-    d1_sync_hour: int                   # 每日 D1 同步触发小时（本地时间），默认 17
-    backfill_batch_symbols: int         # 每批回补处理的 symbol 数量，默认 20
-    m5_backfill_chunk_days: int         # M5 回补每次请求覆盖的天数，默认 20
+    enabled_markets: list[str]  # 启用同步的市场列表，如 ["sse", "szse"]
+    d1_window_days: int  # D1 历史回补窗口（天），默认 730
+    m5_window_days: int  # M5 历史回补窗口（天），默认 60
+    realtime_m5_interval_seconds: int  # 实时 5m 拉取间隔（秒），默认 60
+    d1_sync_hour: int  # 每日 D1 同步触发小时（本地时间），默认 17
+    backfill_batch_symbols: int  # 每批回补处理的 symbol 数量，默认 20
+    m5_backfill_chunk_days: int  # M5 回补每次请求覆盖的天数，默认 20
 
 
 class Settings(BaseSettings):
@@ -148,7 +148,9 @@ class Settings(BaseSettings):
     influx_timeout_ms: int = Field(default=10_000, alias="INFLUX_TIMEOUT_MS")
 
     worker_timezone: str = Field(default="Asia/Shanghai", alias="WORKER_TIMEZONE")
-    worker_ingestion_interval_seconds: int = Field(default=300, alias="WORKER_INGESTION_INTERVAL_SECONDS")
+    worker_ingestion_interval_seconds: int = Field(
+        default=300, alias="WORKER_INGESTION_INTERVAL_SECONDS"
+    )
     worker_candidate_refresh_seconds: int = Field(
         default=900,
         alias="WORKER_CANDIDATE_REFRESH_SECONDS",
@@ -175,6 +177,7 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.1, alias="OPENAI_TEMPERATURE")
 
     tushare_token: str = Field(default="", alias="TUSHARE_TOKEN")
+    tushare_api_url: str = Field(default="", alias="TUSHARE_API_URL")
     baostock_user_id: str = Field(default="anonymous", alias="BAOSTOCK_USER_ID")
     baostock_password: str = Field(default="123456", alias="BAOSTOCK_PASSWORD")
     baostock_options: int = Field(default=0, alias="BAOSTOCK_OPTIONS")
@@ -182,7 +185,9 @@ class Settings(BaseSettings):
     sync_enabled_markets: str = Field(default="sse,szse", alias="SYNC_ENABLED_MARKETS")
     sync_d1_window_days: int = Field(default=730, alias="SYNC_D1_WINDOW_DAYS")
     sync_m5_window_days: int = Field(default=60, alias="SYNC_M5_WINDOW_DAYS")
-    sync_realtime_m5_interval_seconds: int = Field(default=60, alias="SYNC_REALTIME_M5_INTERVAL_SECONDS")
+    sync_realtime_m5_interval_seconds: int = Field(
+        default=60, alias="SYNC_REALTIME_M5_INTERVAL_SECONDS"
+    )
     sync_d1_sync_hour: int = Field(default=17, alias="SYNC_D1_SYNC_HOUR")
     sync_backfill_batch_symbols: int = Field(default=20, alias="SYNC_BACKFILL_BATCH_SYMBOLS")
     sync_m5_backfill_chunk_days: int = Field(default=20, alias="SYNC_M5_BACKFILL_CHUNK_DAYS")
@@ -276,10 +281,10 @@ class Settings(BaseSettings):
 
     @property
     def tushare(self) -> TuShareConfig:
-        """返回 TuShare 数据源配置，包括认证 token 和国内加速节点 URL。"""
+        """返回 TuShare 数据源配置。"""
         return TuShareConfig(
             token=self.tushare_token,
-            http_url="http://lianghua.nanyangqiankun.top",
+            http_url=self.tushare_api_url,
         )
 
     @property

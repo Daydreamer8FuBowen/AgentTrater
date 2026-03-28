@@ -25,11 +25,15 @@ uv run pytest -q
 ## TuShare 说明
 
 TuShare 测试依赖 token。若 token 未设置或失效，相关测试会自动 skip，不影响其余测试。
+支持两种创建模式：
+- 标准模式：仅配置 `TUSHARE_TOKEN`，内部使用 `ts.set_token(token)`。
+- 第三方 URL 模式：同时配置 `TUSHARE_TOKEN` 和 `TUSHARE_API_URL`，内部使用 `ts.pro_api(token)` 并设置 `_DataApi__http_url`。
 
 Windows PowerShell 设置示例：
 
 ```powershell
 $env:TUSHARE_TOKEN="your_token"
+$env:TUSHARE_API_URL="https://your-third-party-url"
 ```
 
 ## 结果解释

@@ -5,6 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Generic, TypeVar
 
+from agent_trader.core.time import utc_now
 from agent_trader.domain.models import BarInterval, ExchangeKind
 
 
@@ -13,6 +14,8 @@ class DataCapability(str, Enum):
 
     # K 线（时间序列）数据能力
     KLINE = "kline"
+    # 公司详情能力（估值 + 财务指标 + 利润表）
+    COMPANY_DETAIL = "company_detail"
     # 新闻/舆情数据能力
     NEWS = "news"
     # 财务报表 / 业绩数据能力
@@ -41,7 +44,9 @@ class KlineQuery:
     interval: BarInterval  # 周期，如 BarInterval.M5, BarInterval.D1
     market: ExchangeKind | None = None  # 可选：指定市场以约束路由
     adjusted: bool = False  # 是否使用前复权（True 表示 qfq）
-    extra: dict[str, Any] = field(default_factory=dict)  # 可扩展的 provider-specific 参数
+    extra: dict[str, Any] = field(
+        default_factory=dict
+    )  # 扩展参数：可用 available_sources/sources 指定候选源
 
 
 @dataclass(slots=True)
@@ -93,20 +98,65 @@ class BasicInfoRecord:
     - area: 地域/省份（可选）。
     - market: 交易市场标识（例如 'SSE', 'SZSE'），可为 None 表示未指定或通用。
     - list_date: 上市日期（datetime），如未知可为 None。
-    - status: 上市状态（例如 'listed'、'delisted'、'suspended' 等）。
+    - status: 上市状态（'1' 表示上市/活跃，'0' 表示退市/非活跃）。
     - delist_date: 退市日期（datetime），如未退市为 None。
     - security_type: 证券类别（例如 'stock'、'fund'、'bond' 等），可为 None。
+    - act_ent_type: 企业性质（可选）。
+    - pe_ttm: 滚动市盈率（可选）。
+    - pe: 静态市盈率（可选）。
+    - pb: 市净率（可选）。
+    - grossprofit_margin: 毛利率（可选）。
+    - netprofit_margin: 净利率（可选）。
+    - roe: 净资产收益率 ROE（可选）。
+    - debt_to_assets: 资产负债率（可选）。
+    - revenue: 营业收入（可选）。
+    - net_profit: 净利润（可选）。
     """
 
     symbol: str
     name: str | None
     industry: str | None
     area: str | None
-    market: str | None
+    market: ExchangeKind | None
     list_date: datetime | None
     status: str | None
     delist_date: datetime | None = None
     security_type: str | None = None
+    act_ent_type: str | None = None
+    pe_ttm: float | None = None
+    pe: float | None = None
+    pb: float | None = None
+    grossprofit_margin: float | None = None
+    netprofit_margin: float | None = None
+    roe: float | None = None
+    debt_to_assets: float | None = None
+    revenue: float | None = None
+    net_profit: float | None = None
+
+
+@dataclass(slots=True)
+class CompanyValuationRecord:
+    trade_date: datetime | None
+    pe_ttm: float | None
+    pe: float | None
+    pb: float | None
+
+
+@dataclass(slots=True)
+class CompanyFinancialIndicatorRecord:
+    report_date: datetime | None
+    grossprofit_margin: float | None
+    netprofit_margin: float | None
+    roe: float | None
+    debt_to_assets: float | None
+
+
+@dataclass(slots=True)
+class CompanyIncomeStatementRecord:
+    report_date: datetime | None
+    report_type: str | None
+    revenue: float | None
+    net_profit: float | None
 
 
 @dataclass(slots=True)
@@ -146,7 +196,7 @@ class FetchResultBase(Generic[TRecord]):
     payload: list[TRecord]
     data_kind: str = "generic"
     schema_version: str = "v1"
-    fetched_at: datetime = field(default_factory=datetime.utcnow)
+    fetched_at: datetime = field(default_factory=utc_now)
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -166,6 +216,21 @@ class BasicInfoFetchResult(KlineCapabilityFetchResultBase[BasicInfoRecord]):
 
 
 @dataclass(slots=True)
+class CompanyValuationFetchResult(FetchResultBase[CompanyValuationRecord]):
+    data_kind: str = field(init=False, default="company_valuation")
+
+
+@dataclass(slots=True)
+class CompanyFinancialIndicatorFetchResult(FetchResultBase[CompanyFinancialIndicatorRecord]):
+    data_kind: str = field(init=False, default="company_financial_indicators")
+
+
+@dataclass(slots=True)
+class CompanyIncomeStatementFetchResult(FetchResultBase[CompanyIncomeStatementRecord]):
+    data_kind: str = field(init=False, default="company_income_statements")
+
+
+@dataclass(slots=True)
 class NewsFetchResult(FetchResultBase[NewsRecord]):
     data_kind: str = field(init=False, default="news")
 
@@ -175,7 +240,15 @@ class FinancialReportFetchResult(FetchResultBase[FinancialReportRecord]):
     data_kind: str = field(init=False, default="financial_report")
 
 
-DataFetchResult = KlineFetchResult | BasicInfoFetchResult | NewsFetchResult | FinancialReportFetchResult
+DataFetchResult = (
+    KlineFetchResult
+    | BasicInfoFetchResult
+    | CompanyValuationFetchResult
+    | CompanyFinancialIndicatorFetchResult
+    | CompanyIncomeStatementFetchResult
+    | NewsFetchResult
+    | FinancialReportFetchResult
+)
 
 
 @dataclass(slots=True)

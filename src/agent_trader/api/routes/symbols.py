@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from agent_trader.api.dependencies import get_symbol_query_service
+from agent_trader.api.time_serialization import serialize_temporal_payload
 from agent_trader.application.services.symbol_query_service import SymbolQueryService
 
 router = APIRouter(prefix="/symbols", tags=["symbols"])
@@ -72,7 +73,7 @@ async def list_symbols(
         page=page,
         page_size=page_size,
     )
-    return SymbolListResponse.model_validate(payload)
+    return SymbolListResponse.model_validate(serialize_temporal_payload(payload))
 
 
 @router.get("/monitor", response_model=SymbolMonitorListResponse)
@@ -93,7 +94,7 @@ async def list_symbols_monitor(
         page=page,
         page_size=page_size,
     )
-    return SymbolMonitorListResponse.model_validate(payload)
+    return SymbolMonitorListResponse.model_validate(serialize_temporal_payload(payload))
 
 
 @router.get("/{symbol}", response_model=SymbolDetailResponse)
@@ -104,4 +105,4 @@ async def get_symbol_detail(
     payload = await service.get_symbol_detail(symbol)
     if payload is None:
         raise HTTPException(status_code=404, detail="symbol not found")
-    return SymbolDetailResponse.model_validate(payload)
+    return SymbolDetailResponse.model_validate(serialize_temporal_payload(payload))

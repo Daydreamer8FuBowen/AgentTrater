@@ -13,9 +13,10 @@ from typing import Any
 from motor.motor_asyncio import AsyncIOMotorDatabase
 from pymongo import UpdateOne
 
+from agent_trader.core.time import utc_now
+from agent_trader.domain.models import ExchangeKind
 from agent_trader.ingestion.models import DataRouteKey
 from agent_trader.storage.mongo.documents import (
-    BackfillProgressDocument,
     BasicInfoDocument,
     CandidateDocument,
     KlineSyncStateDocument,
@@ -30,7 +31,7 @@ from agent_trader.storage.mongo.documents import (
 
 def _task_run_update_timestamp() -> dict[str, datetime]:
     """辅助函数：返回用于更新 `updated_at` 字段的 dict。"""
-    return {"updated_at": datetime.utcnow()}
+    return {"updated_at": utc_now()}
 
 
 class MongoTaskRunRepository:
@@ -59,7 +60,7 @@ class MongoTaskRunRepository:
             {
                 "$set": {
                     "status": "running",
-                    "execution.started_at": datetime.utcnow(),
+                    "execution.started_at": utc_now(),
                     **_task_run_update_timestamp(),
                 }
             },
@@ -73,7 +74,7 @@ class MongoTaskRunRepository:
                 "$set": {
                     "status": "completed",
                     "result.summary": result_summary,
-                    "execution.finished_at": datetime.utcnow(),
+                    "execution.finished_at": utc_now(),
                     **_task_run_update_timestamp(),
                 }
             },
@@ -87,7 +88,7 @@ class MongoTaskRunRepository:
                 "$set": {
                     "status": "failed",
                     "error": {"message": error_message},
-                    "execution.finished_at": datetime.utcnow(),
+                    "execution.finished_at": utc_now(),
                     **_task_run_update_timestamp(),
                 }
             },
@@ -136,7 +137,9 @@ class MongoNewsRepository:
         return items
 
     async def exists_by_dedupe_key(self, dedupe_key: str) -> bool:
-        payload = await self._collection.find_one({"dedupe_key": dedupe_key}, {"_id": 0, "dedupe_key": 1})
+        payload = await self._collection.find_one(
+            {"dedupe_key": dedupe_key}, {"_id": 0, "dedupe_key": 1}
+        )
         return payload is not None
 
 
@@ -158,7 +161,7 @@ class MongoBasicInfoRepository:
         operations: list[UpdateOne] = []
         for item in items:
             payload = item.model_dump()
-            created_at = payload.pop("created_at", datetime.utcnow())
+            created_at = payload.pop("created_at", utc_now())
             operations.append(
                 UpdateOne(
                     {"symbol": item.symbol},
@@ -178,19 +181,62 @@ class MongoBasicInfoRepository:
             "upserted": result.upserted_count,
         }
 
-    async def list_symbols_by_market(self, market: str) -> list[str]:
+    async def list_symbols_by_market(self, market: ExchangeKind) -> list[str]:
         """按市场查询可参与 Tier 分层的 symbol。"""
         query: dict[str, Any] = {
-            "market": market,
-            "status": {"$nin": ["delisted", "0", 0]},
+            "market": market.value,
+            "status": "1",
         }
-        if market in {"sh", "sz"}:
+        if market in {ExchangeKind.SSE, ExchangeKind.SZSE}:
             query["security_type"] = "stock"
             query["name"] = {"$not": re.compile("ST")}
 
         cursor = self._collection.find(query, {"symbol": 1, "_id": 0})
         docs = await cursor.to_list(length=None)
         return [doc["symbol"] for doc in docs]
+
+    async def get_active_stock_symbols(self, market: ExchangeKind) -> list[str]:
+        """按市场查询 status=1 且 security_type=stock 的 symbol。"""
+        query: dict[str, Any] = {
+            "market": market.value,
+            "status": "1",
+            "security_type": "stock",
+        }
+        cursor = self._collection.find(query, {"symbol": 1, "_id": 0})
+        docs = await cursor.to_list(length=None)
+        return [doc["symbol"] for doc in docs]
+
+    async def update_company_details(self, symbol: str, details: dict[str, Any]) -> None:
+        """局部更新股票的详细信息（估值、财务、利润等）。"""
+        if not details:
+            return
+        await self._collection.update_one(
+            {"symbol": symbol},
+            {"$set": details},
+        )
+
+    async def get_available_sources_by_symbol(self, symbol: str) -> list[str] | None:
+        payload = await self._collection.find_one(
+            {"symbol": symbol.strip().upper()},
+            {"_id": 0, "primary_source": 1, "source_trace": 1},
+        )
+        if payload is None:
+            return None
+        sources: list[str] = []
+        primary = payload.get("primary_source")
+        if isinstance(primary, str):
+            candidate = primary.strip()
+            if candidate:
+                sources.append(candidate)
+        trace = payload.get("source_trace")
+        if isinstance(trace, list):
+            for item in trace:
+                if not isinstance(item, str):
+                    continue
+                candidate = item.strip()
+                if candidate and candidate not in sources:
+                    sources.append(candidate)
+        return sources or None
 
 
 class MongoSourcePriorityRepository:
@@ -236,7 +282,7 @@ class MongoSourcePriorityRepository:
             {
                 "$set": {
                     "priorities": priorities,
-                    "updated_at": datetime.utcnow(),
+                    "updated_at": utc_now(),
                 }
             },
         )
@@ -250,7 +296,7 @@ class MongoCandidateRepository:
 
     async def upsert(self, candidate: CandidateDocument) -> CandidateDocument:
         payload = candidate.model_dump()
-        created_at = payload.pop("created_at", datetime.utcnow())
+        created_at = payload.pop("created_at", utc_now())
         await self._collection.update_one(
             {CandidateDocument.primary_key: candidate.candidate_id},
             {
@@ -273,7 +319,7 @@ class MongoCandidateRepository:
         operations: list[UpdateOne] = []
         for item in items:
             payload = item.model_dump()
-            created_at = payload.pop("created_at", datetime.utcnow())
+            created_at = payload.pop("created_at", utc_now())
             operations.append(
                 UpdateOne(
                     {CandidateDocument.primary_key: item.candidate_id},
@@ -294,7 +340,9 @@ class MongoCandidateRepository:
         }
 
     async def get_by_id(self, candidate_id: str) -> CandidateDocument | None:
-        payload = await self._collection.find_one({CandidateDocument.primary_key: candidate_id}, {"_id": 0})
+        payload = await self._collection.find_one(
+            {CandidateDocument.primary_key: candidate_id}, {"_id": 0}
+        )
         return None if payload is None else CandidateDocument.model_validate(payload)
 
     async def list_active(self) -> list[CandidateDocument]:
@@ -308,7 +356,9 @@ class MongoCandidateRepository:
         items = await cursor.to_list(length=None)
         return [CandidateDocument.model_validate(item) for item in items]
 
-    async def list_by_status(self, status: str, *, page: int = 1, page_size: int = 50) -> list[CandidateDocument]:
+    async def list_by_status(
+        self, status: str, *, page: int = 1, page_size: int = 50
+    ) -> list[CandidateDocument]:
         offset = max(page - 1, 0) * max(page_size, 1)
         cursor = (
             self._collection.find({"status": status}, {"_id": 0})
@@ -319,11 +369,13 @@ class MongoCandidateRepository:
         items = await cursor.to_list(length=max(page_size, 1))
         return [CandidateDocument.model_validate(item) for item in items]
 
-    async def deprecate(self, candidate_id: str, *, status: str = "deprecated", audit_id: str | None = None) -> None:
+    async def deprecate(
+        self, candidate_id: str, *, status: str = "deprecated", audit_id: str | None = None
+    ) -> None:
         update_doc: dict[str, Any] = {
             "$set": {
                 "status": status,
-                "deprecated_at": datetime.utcnow(),
+                "deprecated_at": utc_now(),
             }
         }
         if audit_id:
@@ -343,7 +395,7 @@ class MongoPositionRepository:
 
     async def upsert(self, position: PositionDocument) -> PositionDocument:
         payload = position.model_dump()
-        created_at = payload.pop("created_at", datetime.utcnow())
+        created_at = payload.pop("created_at", utc_now())
         await self._collection.update_one(
             {PositionDocument.primary_key: position.position_id},
             {
@@ -366,7 +418,7 @@ class MongoPositionRepository:
         operations: list[UpdateOne] = []
         for item in items:
             payload = item.model_dump()
-            created_at = payload.pop("created_at", datetime.utcnow())
+            created_at = payload.pop("created_at", utc_now())
             operations.append(
                 UpdateOne(
                     {PositionDocument.primary_key: item.position_id},
@@ -387,7 +439,9 @@ class MongoPositionRepository:
         }
 
     async def get_by_id(self, position_id: str) -> PositionDocument | None:
-        payload = await self._collection.find_one({PositionDocument.primary_key: position_id}, {"_id": 0})
+        payload = await self._collection.find_one(
+            {PositionDocument.primary_key: position_id}, {"_id": 0}
+        )
         return None if payload is None else PositionDocument.model_validate(payload)
 
     async def list_active(self) -> list[PositionDocument]:
@@ -401,7 +455,9 @@ class MongoPositionRepository:
         items = await cursor.to_list(length=None)
         return [PositionDocument.model_validate(item) for item in items]
 
-    async def list_by_status(self, status: str, *, page: int = 1, page_size: int = 50) -> list[PositionDocument]:
+    async def list_by_status(
+        self, status: str, *, page: int = 1, page_size: int = 50
+    ) -> list[PositionDocument]:
         offset = max(page - 1, 0) * max(page_size, 1)
         cursor = (
             self._collection.find({"status": status}, {"_id": 0})
@@ -412,11 +468,13 @@ class MongoPositionRepository:
         items = await cursor.to_list(length=max(page_size, 1))
         return [PositionDocument.model_validate(item) for item in items]
 
-    async def deprecate(self, position_id: str, *, status: str = "deprecated", audit_id: str | None = None) -> None:
+    async def deprecate(
+        self, position_id: str, *, status: str = "deprecated", audit_id: str | None = None
+    ) -> None:
         update_doc: dict[str, Any] = {
             "$set": {
                 "status": status,
-                "deprecated_at": datetime.utcnow(),
+                "deprecated_at": utc_now(),
             }
         }
         if audit_id:
@@ -434,14 +492,20 @@ class MongoKlineSyncStateRepository:
     def __init__(self, database: AsyncIOMotorDatabase) -> None:
         self._collection = database[KlineSyncStateDocument.collection_name]
 
-    async def get_or_create(self, symbol: str, market: str, interval: str) -> KlineSyncStateDocument:
-        """按 (symbol, market, interval) 获取状态文档，不存在时新建。"""
+    async def get(self, symbol: str, market: ExchangeKind, interval: str) -> KlineSyncStateDocument | None:
         payload = await self._collection.find_one(
             {"symbol": symbol, "market": market, "interval": interval},
             {"_id": 0},
         )
+        return None if payload is None else KlineSyncStateDocument.model_validate(payload)
+
+    async def get_or_create(
+        self, symbol: str, market: ExchangeKind, interval: str
+    ) -> KlineSyncStateDocument:
+        """按 (symbol, market, interval) 获取状态文档，不存在时新建。"""
+        payload = await self.get(symbol, market, interval)
         if payload is not None:
-            return KlineSyncStateDocument.model_validate(payload)
+            return payload
         doc = KlineSyncStateDocument(symbol=symbol, market=market, interval=interval)
         await self._collection.insert_one(doc.model_dump())
         return doc
@@ -449,52 +513,9 @@ class MongoKlineSyncStateRepository:
     async def update(self, state: KlineSyncStateDocument) -> None:
         """更新同步状态（以 state_id 为主键，自动刷新 updated_at）。"""
         payload = state.model_dump()
-        payload["updated_at"] = datetime.utcnow()
+        payload["updated_at"] = utc_now()
         await self._collection.update_one(
             {"state_id": state.state_id},
             {"$set": payload},
             upsert=True,
-        )
-
-
-class MongoBackfillProgressRepository:
-    """历史回补进度仓储实现。"""
-
-    def __init__(self, database: AsyncIOMotorDatabase) -> None:
-        self._collection = database[BackfillProgressDocument.collection_name]
-
-    async def get(self, market: str, interval: str, tier: str) -> BackfillProgressDocument | None:
-        """按 (market, interval, tier) 获取回补进度文档。"""
-        payload = await self._collection.find_one(
-            {"market": market, "interval": interval, "tier": tier},
-            {"_id": 0},
-        )
-        return None if payload is None else BackfillProgressDocument.model_validate(payload)
-
-    async def upsert(self, progress: BackfillProgressDocument) -> None:
-        """创建或更新回补进度文档（以 progress_id 为主键）。"""
-        payload = progress.model_dump()
-        payload["updated_at"] = datetime.utcnow()
-        await self._collection.update_one(
-            {"progress_id": progress.progress_id},
-            {"$set": payload},
-            upsert=True,
-        )
-
-    async def update_cursor(
-        self,
-        progress_id: str,
-        cursor: datetime,
-        completion_ratio: float,
-    ) -> None:
-        """轻量更新：只修改 cursor 和 completion_ratio。"""
-        await self._collection.update_one(
-            {"progress_id": progress_id},
-            {
-                "$set": {
-                    "cursor": cursor,
-                    "completion_ratio": completion_ratio,
-                    "updated_at": datetime.utcnow(),
-                }
-            },
         )

@@ -7,6 +7,7 @@ import {
   Cpu,
   DataAnalysis,
   DataBoard,
+  Grid,
   Histogram,
   Monitor,
   SetUp,
@@ -27,6 +28,7 @@ const menuGroups = [
     title: '核心模块',
     items: [
       { label: '仪表盘', icon: DataBoard, path: '/dashboard' },
+      { label: '数据源路由', icon: Grid, path: '/data-sources' },
       { label: 'Symbol 监控', icon: Monitor, path: '/symbols' },
       { label: '智能体管理', icon: Cpu, path: '/agents' },
       { label: '策略编辑', icon: TrendCharts, path: '/strategy-editor' },

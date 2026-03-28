@@ -5,7 +5,7 @@ from typing import Any
 
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from agent_trader.storage.mongo.documents import BackfillProgressDocument, BasicInfoDocument, KlineSyncStateDocument
+from agent_trader.storage.mongo.documents import BasicInfoDocument, KlineSyncStateDocument
 
 
 def _to_sync_market(market: str | None) -> str | None:
@@ -21,7 +21,6 @@ class SymbolQueryService:
     def __init__(self, database: AsyncIOMotorDatabase) -> None:
         self._basic_infos = database[BasicInfoDocument.collection_name]
         self._sync_states = database[KlineSyncStateDocument.collection_name]
-        self._progress = database[BackfillProgressDocument.collection_name]
 
     async def list_symbols(
         self,
@@ -55,7 +54,12 @@ class SymbolQueryService:
             "updated_at": 1,
         }
         total = await self._basic_infos.count_documents(query)
-        cursor = self._basic_infos.find(query, projection).sort("symbol", 1).skip(skip).limit(page_size_value)
+        cursor = (
+            self._basic_infos.find(query, projection)
+            .sort("symbol", 1)
+            .skip(skip)
+            .limit(page_size_value)
+        )
         items = await cursor.to_list(length=page_size_value)
 
         return {
@@ -92,19 +96,6 @@ class SymbolQueryService:
         sync_markets = {_to_sync_market(item.get("market")) for item in items}
         sync_markets.discard(None)
 
-        progress_map: dict[str, dict[str, Any]] = {}
-        if sync_markets:
-            progress_cursor = self._progress.find(
-                {
-                    "market": {"$in": list(sync_markets)},
-                    "interval": "1d",
-                    "tier": "ABC",
-                },
-                {"_id": 0, "market": 1, "completion_ratio": 1, "status": 1, "cursor": 1},
-            )
-            for doc in await progress_cursor.to_list(length=None):
-                progress_map[str(doc.get("market", ""))] = doc
-
         state_cursor = self._sync_states.find(
             {
                 "symbol": {"$in": symbols},
@@ -116,7 +107,6 @@ class SymbolQueryService:
                 "interval": 1,
                 "status": 1,
                 "last_bar_time": 1,
-                "lag_seconds": 1,
             },
         )
         state_docs = await state_cursor.to_list(length=None)
@@ -136,15 +126,14 @@ class SymbolQueryService:
         for item in items:
             symbol = str(item.get("symbol", "")).upper()
             sync_market = _to_sync_market(item.get("market"))
-            progress = progress_map.get(sync_market or "", {})
             state = latest_state.get(symbol, {})
             enriched = dict(item)
-            enriched["d1_completion_ratio"] = float(progress.get("completion_ratio", 0.0) or 0.0)
-            enriched["d1_progress_status"] = str(progress.get("status", "unknown"))
+            enriched["d1_completion_ratio"] = 0.0
+            enriched["d1_progress_status"] = "not_tracked"
             enriched["latest_bar_time"] = state.get("last_bar_time")
             enriched["sync_status"] = str(state.get("status", "unknown"))
             enriched["latest_interval"] = state.get("interval")
-            enriched["lag_seconds"] = float(state.get("lag_seconds", 0.0) or 0.0)
+            enriched["lag_seconds"] = 0.0
             enriched_items.append(enriched)
 
         payload["items"] = enriched_items
@@ -166,23 +155,12 @@ class SymbolQueryService:
         ).sort("interval", 1)
         states = await state_cursor.to_list(length=None)
 
-        progress = None
-        if sync_market is not None:
-            progress = await self._progress.find_one(
-                {
-                    "market": sync_market,
-                    "interval": "1d",
-                    "tier": "ABC",
-                },
-                {"_id": 0},
-            )
-
         return {
             "symbol": normalized_symbol,
             "basic_info": basic_info,
             "sync_market": sync_market,
             "sync_states": states,
-            "d1_progress": progress,
+            "d1_progress": None,
         }
 
     def _build_query(

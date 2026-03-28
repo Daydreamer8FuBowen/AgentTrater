@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 
 from agent_trader.application.data_access.gateway import BasicInfoSourceFetchOutcome
-from agent_trader.application.services.basic_info_aggregation_service import BasicInfoAggregationService
+from agent_trader.application.services.basic_info_aggregation_service import (
+    BasicInfoAggregationService,
+)
 from agent_trader.domain.models import ExchangeKind
 from agent_trader.ingestion.models import (
     BasicInfoFetchResult,
@@ -13,7 +15,7 @@ from agent_trader.ingestion.models import (
     DataCapability,
     DataRouteKey,
 )
-from tests.support.in_memory_uow import InMemoryUnitOfWork
+from support.in_memory_uow import InMemoryUnitOfWork
 
 
 class _StubGateway:
@@ -52,7 +54,7 @@ async def test_sync_basic_info_snapshot_merge_uses_priority_and_fill_only() -> N
             industry=None,
             area=None,
             market="sz",
-            list_date=datetime(1991, 4, 3),
+            list_date=datetime(1991, 4, 3, tzinfo=timezone.utc),
             status="1",
             delist_date=None,
             security_type=None,
@@ -65,7 +67,7 @@ async def test_sync_basic_info_snapshot_merge_uses_priority_and_fill_only() -> N
             industry="Bank",
             area="Shenzhen",
             market="szse",
-            list_date=datetime(1991, 4, 3),
+            list_date=datetime(1991, 4, 3, tzinfo=timezone.utc),
             status="0",
             delist_date=None,
             security_type="2",
@@ -102,6 +104,17 @@ async def test_sync_basic_info_snapshot_merge_uses_priority_and_fill_only() -> N
     assert saved.security_type == "2"
     assert saved.source_trace == ["tushare", "baostock"]
     assert sorted(saved.conflict_fields) == ["name", "status"]
+    saved_payload = saved.model_dump()
+    assert "act_ent_type" in saved_payload
+    assert "pe_ttm" in saved_payload
+    assert "pe" in saved_payload
+    assert "pb" in saved_payload
+    assert "grossprofit_margin" in saved_payload
+    assert "netprofit_margin" in saved_payload
+    assert "roe" in saved_payload
+    assert "debt_to_assets" in saved_payload
+    assert "revenue" in saved_payload
+    assert "net_profit" in saved_payload
 
 
 @pytest.mark.asyncio
@@ -158,7 +171,7 @@ async def test_sync_basic_info_snapshot_normalizes_symbol_and_keeps_failures() -
     assert summary["dedup_count"] == 1
 
     saved = uow.store.basic_info_items["600000.SH"]
-    assert saved.market == "sh"
+    assert saved.market == ExchangeKind.SSE
     assert saved.name == "浦发银行"
     assert saved.area == "Shanghai"
     assert saved.security_type == "2"

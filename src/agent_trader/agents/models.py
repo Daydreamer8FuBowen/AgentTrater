@@ -18,7 +18,9 @@ class AgentModelRegistry:
         normalized_name = agent_name.strip()
         if not normalized_name:
             raise ValueError("agent_name must not be empty")
-        return self._settings.agent_models.model_map.get(normalized_name, self._settings.agent_models.default_model)
+        return self._settings.agent_models.model_map.get(
+            normalized_name, self._settings.agent_models.default_model
+        )
 
     def get_chat_model(self, agent_name: str) -> BaseChatModel:
         openai = self._settings.openai

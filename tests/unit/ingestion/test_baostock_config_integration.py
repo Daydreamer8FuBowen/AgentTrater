@@ -1,4 +1,5 @@
 """测试 BaoStock 配置集成"""
+
 import pytest
 
 from agent_trader.core.config import BaoStockConfig, get_settings

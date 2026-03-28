@@ -6,6 +6,7 @@ import { useRoute, useRouter } from 'vue-router'
 
 import TradingViewKlineChart from '../components/symbols/TradingViewKlineChart.vue'
 import { fetchSymbolDetail, type SymbolDetailResponse } from '../api/symbolsApi'
+import { formatDateTime } from '../utils/datetime'
 
 const route = useRoute()
 const router = useRouter()
@@ -32,10 +33,7 @@ function normalizeText(value: unknown): string {
 }
 
 function formatDate(value: unknown): string {
-  if (!value) return '--'
-  const date = new Date(String(value))
-  if (Number.isNaN(date.getTime())) return '--'
-  return `${date.toLocaleDateString()} ${date.toLocaleTimeString()}`
+  return formatDateTime(typeof value === 'string' ? value : null, '--')
 }
 
 function statusType(status: unknown): 'success' | 'warning' | 'danger' | 'info' {

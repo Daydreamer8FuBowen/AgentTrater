@@ -15,7 +15,6 @@ from agent_trader.storage.mongo.documents import (
     AgentDefinitionDocument,
     AgentReleaseDocument,
     AgentReleasePointerDocument,
-    BackfillProgressDocument,
     BasicInfoDocument,
     CandidateDocument,
     KlineSyncStateDocument,
@@ -60,14 +59,16 @@ class DocumentConfig:
         return tuple(self.model.model_fields.keys())
 
 
-def _document_config(model: type[MongoDocument], *, indexes: tuple[IndexModel, ...] = ()) -> DocumentConfig:
+def _document_config(
+    model: type[MongoDocument], *, indexes: tuple[IndexModel, ...] = ()
+) -> DocumentConfig:
     return DocumentConfig(
-        name=getattr(model, "collection_name"),
+        name=model.collection_name,
         model=model,
-        primary_key=getattr(model, "primary_key"),
-        searchable_columns=getattr(model, "searchable_fields"),
-        json_columns=getattr(model, "json_fields"),
-        editable_columns=getattr(model, "editable_fields"),
+        primary_key=model.primary_key,
+        searchable_columns=model.searchable_fields,
+        json_columns=model.json_fields,
+        editable_columns=model.editable_fields,
         indexes=indexes,
     )
 
@@ -95,7 +96,9 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
             indexes=(
                 IndexModel([(SkillVersionDocument.primary_key, ASCENDING)], unique=True),
                 IndexModel([("skill_id", ASCENDING), ("version", ASCENDING)], unique=True),
-                IndexModel([("skill_id", ASCENDING), ("status", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel(
+                    [("skill_id", ASCENDING), ("status", ASCENDING), ("published_at", DESCENDING)]
+                ),
                 IndexModel([("checksum", ASCENDING)]),
             ),
         ),
@@ -103,12 +106,16 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
             AgentReleaseDocument,
             indexes=(
                 IndexModel([(AgentReleaseDocument.primary_key, ASCENDING)], unique=True),
-                IndexModel([("agent_id", ASCENDING), ("status", ASCENDING), ("published_at", DESCENDING)]),
+                IndexModel(
+                    [("agent_id", ASCENDING), ("status", ASCENDING), ("published_at", DESCENDING)]
+                ),
             ),
         ),
         _document_config(
             AgentReleasePointerDocument,
-            indexes=(IndexModel([(AgentReleasePointerDocument.primary_key, ASCENDING)], unique=True),),
+            indexes=(
+                IndexModel([(AgentReleasePointerDocument.primary_key, ASCENDING)], unique=True),
+            ),
         ),
         _document_config(
             TaskRunDocument,
@@ -142,7 +149,9 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
             indexes=(
                 IndexModel([(TaskCheckpointDocument.primary_key, ASCENDING)], unique=True),
                 IndexModel([("run_id", ASCENDING), ("seq", ASCENDING)]),
-                IndexModel([("run_id", ASCENDING), ("node_id", ASCENDING), ("created_at", DESCENDING)]),
+                IndexModel(
+                    [("run_id", ASCENDING), ("node_id", ASCENDING), ("created_at", DESCENDING)]
+                ),
             ),
         ),
         _document_config(
@@ -208,17 +217,6 @@ DOCUMENT_REGISTRY: dict[str, DocumentConfig] = {
                 ),
                 IndexModel([("market", ASCENDING), ("interval", ASCENDING), ("status", ASCENDING)]),
                 IndexModel([("last_bar_time", ASCENDING)]),
-            ),
-        ),
-        _document_config(
-            BackfillProgressDocument,
-            indexes=(
-                IndexModel([(BackfillProgressDocument.primary_key, ASCENDING)], unique=True),
-                IndexModel(
-                    [("market", ASCENDING), ("interval", ASCENDING), ("tier", ASCENDING)],
-                    unique=True,
-                ),
-                IndexModel([("status", ASCENDING), ("updated_at", DESCENDING)]),
             ),
         ),
     )

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any, TypedDict
 from uuid import UUID, uuid4
 
+from agent_trader.core.time import utc_now
 from agent_trader.domain.models import Candidate, Opportunity, ResearchTask, StrategyConstraint
 
 
@@ -27,5 +28,5 @@ class RunMetadata:
 
     trigger_id: UUID
     run_id: UUID = field(default_factory=uuid4)
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    started_at: datetime = field(default_factory=utc_now)
     tags: dict[str, str] = field(default_factory=dict)

@@ -9,10 +9,9 @@ from __future__ import annotations
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
 from agent_trader.storage.base import (
-    BackfillProgressRepository,
     BasicInfoRepository,
-    CandleRepository,
     CandidateRepository,
+    CandleRepository,
     KlineSyncStateRepository,
     MemoryRepository,
     NewsRepository,
@@ -22,7 +21,6 @@ from agent_trader.storage.base import (
     UnitOfWork,
 )
 from agent_trader.storage.mongo.repository import (
-    MongoBackfillProgressRepository,
     MongoBasicInfoRepository,
     MongoCandidateRepository,
     MongoKlineSyncStateRepository,
@@ -75,9 +73,8 @@ class MongoUnitOfWork(UnitOfWork):
         self.source_priorities: SourcePriorityRepository = MongoSourcePriorityRepository(database)
         self.candidates: CandidateRepository = MongoCandidateRepository(database)
         self.positions: PositionRepository = MongoPositionRepository(database)
-        # K 线同步状态与回补进度
+        # K 线同步状态
         self.kline_sync_states: KlineSyncStateRepository = MongoKlineSyncStateRepository(database)
-        self.backfill_progress: BackfillProgressRepository = MongoBackfillProgressRepository(database)
         # 尚未接入 Mongo 的仓库（占位）
         self.memories: MemoryRepository = _UnsupportedMemoryRepository()
         self.signals: SignalRepository = _UnsupportedSignalRepository()

@@ -1,8 +1,6 @@
 import asyncio
 import types
 
-import pytest
-
 
 def _make_fake_result():
     class FakeResult:
@@ -32,7 +30,9 @@ def test_fetch_basic_info(monkeypatch):
     fake_result = _make_fake_result()
 
     # patch baostock methods used by the source
-    monkeypatch.setattr(mod.bs, "login", lambda u, p, o: types.SimpleNamespace(error_code="0", error_msg=""))
+    monkeypatch.setattr(
+        mod.bs, "login", lambda u, p, o: types.SimpleNamespace(error_code="0", error_msg="")
+    )
     monkeypatch.setattr(mod.bs, "logout", lambda u: None)
     monkeypatch.setattr(mod.bs, "query_stock_basic", lambda: fake_result)
 

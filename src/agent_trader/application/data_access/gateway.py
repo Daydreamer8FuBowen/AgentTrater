@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import datetime
+from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from agent_trader.domain.models import BarInterval, ExchangeKind
+from agent_trader.application.data_access.kline_utils import (
+    MAX_KLINE_BARS,
+    estimate_kline_count,
+)
+from agent_trader.domain.models import ExchangeKind
 from agent_trader.ingestion.models import (
     BasicInfoFetchResult,
+    CompanyFinancialIndicatorFetchResult,
+    CompanyIncomeStatementFetchResult,
+    CompanyValuationFetchResult,
     DataCapability,
     DataFetchResult,
     DataRouteKey,
@@ -19,11 +25,6 @@ from agent_trader.ingestion.models import (
     KlineQuery,
     NewsFetchResult,
     NewsQuery,
-)
-
-from agent_trader.application.data_access.kline_utils import (
-    MAX_KLINE_BARS,
-    estimate_kline_count,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,18 +76,31 @@ class SourceSelectionAdapter:
     def registry(self) -> DataSourceRegistry:
         return self._registry
 
-    async def select_sources(self, route_key: DataRouteKey) -> list[str]:
+    async def select_sources(
+        self,
+        route_key: DataRouteKey,
+        *,
+        available_sources: list[str] | None = None,
+    ) -> list[str]:
         route = await self._priority_repository.get(route_key)
-        if route is not None and route.enabled and route.priorities:
-            return route.priorities
-        return self._registry.names()
+        prioritized_sources = (
+            route.priorities
+            if route is not None and route.enabled and route.priorities
+            else self._registry.names()
+        )
+        if not available_sources:
+            return list(prioritized_sources)
+        allowed_set = set(available_sources)
+        return [source_name for source_name in prioritized_sources if source_name in allowed_set]
 
     async def execute(
         self,
         route_key: DataRouteKey,
         invoker: Callable[[str, object], Awaitable[TResult]],
+        *,
+        available_sources: list[str] | None = None,
     ) -> TResult:
-        source_names = await self.select_sources(route_key)
+        source_names = await self.select_sources(route_key, available_sources=available_sources)
         if not source_names:
             raise RuntimeError(f"No source registered for route={route_key.as_storage_key()}")
 
@@ -102,7 +116,6 @@ class SourceSelectionAdapter:
                 return await invoker(source_name, provider)
             except Exception as exc:  # noqa: BLE001
                 last_error = exc
-                await self._move_source_to_tail(route_key=route_key, source_name=source_name, current_order=source_names)
                 logger.warning(
                     "source failed route=%s source=%s error=%s",
                     route_id,
@@ -111,26 +124,6 @@ class SourceSelectionAdapter:
                 )
 
         raise RuntimeError(f"All sources failed for route={route_id}") from last_error
-
-    async def _move_source_to_tail(
-        self,
-        *,
-        route_key: DataRouteKey,
-        source_name: str,
-        current_order: list[str],
-    ) -> None:
-        route = await self._priority_repository.get(route_key)
-        priorities = list(route.priorities) if route is not None and route.priorities else list(current_order)
-        if source_name not in priorities:
-            return
-
-        priorities.remove(source_name)
-        priorities.append(source_name)
-        if route is None:
-            await self._priority_repository.upsert(route_key, priorities=priorities, enabled=True)
-            return
-        await self._priority_repository.reorder(route_key, priorities=priorities)
-
 
 class DataAccessGateway:
     """统一数据访问门面，业务层仅依赖这个入口。"""
@@ -152,6 +145,69 @@ class DataAccessGateway:
                     f"provider={getattr(provider, 'name', 'unknown')} missing basic_info ability"
                 )
             return await method(market=market)
+
+        return await self._selector.execute(route_key, _invoke)
+
+    async def fetch_company_valuation_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyValuationFetchResult:
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+
+        async def _invoke(_: str, provider: object) -> CompanyValuationFetchResult:
+            method = getattr(provider, "fetch_company_valuation_unified", None)
+            if not callable(method):
+                raise NotImplementedError(
+                    f"provider={getattr(provider, 'name', 'unknown')} missing company_valuation ability"
+                )
+            return await method(symbol=symbol, market=market)
+
+        return await self._selector.execute(route_key, _invoke)
+
+    async def fetch_company_financial_indicators_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyFinancialIndicatorFetchResult:
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+
+        async def _invoke(_: str, provider: object) -> CompanyFinancialIndicatorFetchResult:
+            method = getattr(provider, "fetch_company_financial_indicators_unified", None)
+            if not callable(method):
+                raise NotImplementedError(
+                    f"provider={getattr(provider, 'name', 'unknown')} missing company_financial_indicators ability"
+                )
+            return await method(symbol=symbol, market=market)
+
+        return await self._selector.execute(route_key, _invoke)
+
+    async def fetch_company_income_statements_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyIncomeStatementFetchResult:
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+
+        async def _invoke(_: str, provider: object) -> CompanyIncomeStatementFetchResult:
+            method = getattr(provider, "fetch_company_income_statements_unified", None)
+            if not callable(method):
+                raise NotImplementedError(
+                    f"provider={getattr(provider, 'name', 'unknown')} missing company_income_statements ability"
+                )
+            return await method(symbol=symbol, market=market)
 
         return await self._selector.execute(route_key, _invoke)
 
@@ -206,7 +262,34 @@ class DataAccessGateway:
 
         return await asyncio.gather(*[_fetch_one(name) for name in source_names])
 
+    @staticmethod
+    def _extract_available_sources(query: KlineQuery) -> list[str] | None:
+        raw_value = query.extra.get("available_sources")
+        if raw_value is None:
+            raw_value = query.extra.get("sources")
+        if raw_value is None:
+            return None
+        if not isinstance(raw_value, list):
+            raise ValueError("query.extra.available_sources must be a list[str]")
+        values = [item.strip() for item in raw_value if isinstance(item, str) and item.strip()]
+        if not values:
+            return None
+        deduplicated: list[str] = []
+        seen: set[str] = set()
+        for source_name in values:
+            if source_name not in seen:
+                seen.add(source_name)
+                deduplicated.append(source_name)
+        return deduplicated
+
     async def fetch_klines(self, query: KlineQuery) -> KlineFetchResult:
+        """K 线统一入口。
+
+        可通过 query.extra 指定执行范围：
+        - extra.available_sources: list[str]（推荐）
+        - extra.sources: list[str]（兼容）
+        当指定后，仅在该子集内按既有优先级顺序执行，并保持单源失败隔离。
+        """
         estimated = estimate_kline_count(
             query.start_time,
             query.end_time,
@@ -228,10 +311,17 @@ class DataAccessGateway:
         async def _invoke(_: str, provider: object) -> KlineFetchResult:
             method = getattr(provider, "fetch_klines_unified", None)
             if not callable(method):
-                raise NotImplementedError(f"provider={getattr(provider, 'name', 'unknown')} missing kline ability")
+                raise NotImplementedError(
+                    f"provider={getattr(provider, 'name', 'unknown')} missing kline ability"
+                )
             return await method(query)
 
-        return await self._selector.execute(route_key, _invoke)
+        available_sources = self._extract_available_sources(query)
+        return await self._selector.execute(
+            route_key,
+            _invoke,
+            available_sources=available_sources,
+        )
 
     async def fetch_news(self, query: NewsQuery) -> NewsFetchResult:
         route_key = DataRouteKey(
@@ -243,12 +333,17 @@ class DataAccessGateway:
         async def _invoke(_: str, provider: object) -> NewsFetchResult:
             method = getattr(provider, "fetch_news_unified", None)
             if not callable(method):
-                raise NotImplementedError(f"provider={getattr(provider, 'name', 'unknown')} missing news ability")
+                raise NotImplementedError(
+                    f"provider={getattr(provider, 'name', 'unknown')} missing news ability"
+                )
             return await method(query)
 
         return await self._selector.execute(route_key, _invoke)
 
-    async def fetch_financial_reports(self, query: FinancialReportQuery) -> FinancialReportFetchResult:
+    async def fetch_financial_reports(
+        self,
+        query: FinancialReportQuery,
+    ) -> FinancialReportFetchResult:
         route_key = DataRouteKey(
             capability=DataCapability.FINANCIAL_REPORT,
             market=query.market,
@@ -259,7 +354,8 @@ class DataAccessGateway:
             method = getattr(provider, "fetch_financial_reports_unified", None)
             if not callable(method):
                 raise NotImplementedError(
-                    f"provider={getattr(provider, 'name', 'unknown')} missing financial_report ability"
+                    f"provider={getattr(provider, 'name', 'unknown')}"
+                    " missing financial_report ability"
                 )
             return await method(query)
 

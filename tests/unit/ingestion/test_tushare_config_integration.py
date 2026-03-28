@@ -1,7 +1,9 @@
 """测试 TuShare 配置集成"""
-import pytest
 
-from agent_trader.core.config import Settings, TuShareConfig, get_settings
+import pytest
+from pydantic import ValidationError
+
+from agent_trader.core.config import TuShareConfig, get_settings
 from agent_trader.ingestion.sources.tushare_source import TuShareSource
 
 
@@ -11,8 +13,7 @@ def test_tushare_config_loads_from_settings():
     tushare_config = settings.tushare
 
     assert isinstance(tushare_config, TuShareConfig)
-    # 验证 http_url 总是正确的
-    assert tushare_config.http_url == "http://lianghua.nanyangqiankun.top"
+    assert isinstance(tushare_config.http_url, str)
     # Token 可能为空（如果没有在 .env 中设置），但应该是字符串类型
     assert isinstance(tushare_config.token, str)
 
@@ -41,5 +42,5 @@ def test_tushare_config_properties_are_frozen():
     settings = get_settings()
     tushare_config = settings.tushare
 
-    with pytest.raises(Exception):  # frozen dataclass 会抛出 FrozenInstanceError
+    with pytest.raises(ValidationError):
         tushare_config.token = "new_token"  # type: ignore

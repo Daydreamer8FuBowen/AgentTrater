@@ -6,6 +6,8 @@ from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
+from agent_trader.core.time import utc_now
+
 
 class TriggerKind(str, Enum):
     """系统的统一触发入口，后续采集链路和 Agent 路由都基于它分流。"""
@@ -116,7 +118,7 @@ class Opportunity:
     confidence: float
     source_ref: str
     id: UUID = field(default_factory=uuid4)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -127,7 +129,7 @@ class ResearchTask:
     trigger_kind: TriggerKind
     payload: dict[str, Any]
     id: UUID = field(default_factory=uuid4)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -140,7 +142,7 @@ class Candidate:
     score: float
     constraints: list[str]
     id: UUID = field(default_factory=uuid4)
-    updated_at: datetime = field(default_factory=datetime.utcnow)
+    updated_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)
@@ -161,7 +163,7 @@ class MemoryRecord:
     content: str
     metadata: dict[str, Any]
     id: UUID = field(default_factory=uuid4)
-    created_at: datetime = field(default_factory=datetime.utcnow)
+    created_at: datetime = field(default_factory=utc_now)
 
 
 @dataclass(slots=True)

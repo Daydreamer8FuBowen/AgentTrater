@@ -5,8 +5,13 @@ from collections.abc import Callable
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from motor.motor_asyncio import AsyncIOMotorDatabase
 
-from agent_trader.application.data_access import DataAccessGateway, DataSourceRegistry, SourceSelectionAdapter
-from agent_trader.application.services.kline_sync_service import KlineSyncService, TierCollectionService
+from agent_trader.application.data_access import (
+    DataAccessGateway,
+    DataSourceRegistry,
+    SourceSelectionAdapter,
+)
+from agent_trader.application.jobs.company_detail_sync import CompanyDetailSyncService
+from agent_trader.application.jobs.kline_sync import KlineSyncService, TierCollectionService
 from agent_trader.core.config import Settings, get_settings
 from agent_trader.storage.influx import InfluxCandleRepository, InfluxConnectionManager
 from agent_trader.storage.mongo import MongoUnitOfWork
@@ -45,3 +50,24 @@ def build_kline_sync_service_factory(
         )
 
     return _factory
+
+
+def build_company_detail_sync_service_factory(
+    *,
+    database: AsyncIOMotorDatabase,
+    source_registry: DataSourceRegistry,
+) -> Callable[[], CompanyDetailSyncService]:
+    def _factory() -> CompanyDetailSyncService:
+        selector = SourceSelectionAdapter(
+            registry=source_registry,
+            priority_repository=MongoSourcePriorityRepository(database),
+        )
+        gateway = DataAccessGateway(selector)
+        uow_factory = lambda: MongoUnitOfWork(database)
+        return CompanyDetailSyncService(
+            gateway=gateway,
+            uow_factory=uow_factory,
+        )
+
+    return _factory
+

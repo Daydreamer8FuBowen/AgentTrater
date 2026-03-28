@@ -12,12 +12,17 @@ from agent_trader.worker.main import WorkerRuntime, bootstrap_worker, main, run_
 worker_runtime = importlib.import_module("agent_trader.worker.runtime")
 
 
+class _FakeDatabase:
+    def __getitem__(self, name: str) -> object:
+        return object()
+
+
 class _FakeConnections:
     def __init__(self, events: list[str]) -> None:
         self._events = events
         self.started = False
         self.closed = False
-        self.mongo_manager = SimpleNamespace(database=object())
+        self.mongo_manager = SimpleNamespace(database=_FakeDatabase())
         self.influx_manager = object()
 
     async def start(self) -> None:
@@ -49,7 +54,9 @@ class _FakeScheduler:
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_worker_auto_registers_jobs_after_connections_started(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_bootstrap_worker_auto_registers_jobs_after_connections_started(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[str] = []
     fake_connections = _FakeConnections(events)
     fake_scheduler = _FakeScheduler(events)
@@ -65,9 +72,16 @@ async def test_bootstrap_worker_auto_registers_jobs_after_connections_started(mo
         return fake_scheduler
 
     def _fake_build_source_registry(settings: Settings) -> object:  # noqa: ARG001
+        class _FakeRegistry:
+            def names(self):
+                return []
+
+            def get(self, name):
+                return None
+
         assert fake_connections.started
         events.append("build_source_registry")
-        return object()
+        return _FakeRegistry()
 
     def _fake_build_factory(**kwargs: object) -> object:  # noqa: ARG001
         assert fake_connections.started
@@ -78,12 +92,19 @@ async def test_bootstrap_worker_auto_registers_jobs_after_connections_started(mo
         assert fake_connections.started
         events.append("register_jobs")
 
+    async def _fake_health_check(selector: object) -> None:
+        assert fake_connections.started
+        events.append("health_check_sources")
+
     monkeypatch.setattr(worker_runtime, "AppConnectionManager", _FakeAppConnectionManager)
     monkeypatch.setattr(worker_runtime, "configure_logging", lambda level: None)
+    monkeypatch.setattr(worker_runtime, "_health_check_sources", _fake_health_check)
     monkeypatch.setattr(worker_runtime, "create_scheduler", _fake_create_scheduler)
     monkeypatch.setattr(worker_runtime, "_build_source_registry", _fake_build_source_registry)
     monkeypatch.setattr(worker_runtime, "build_kline_sync_service_factory", _fake_build_factory)
+    monkeypatch.setattr(worker_runtime, "build_company_detail_sync_service_factory", _fake_build_factory)
     monkeypatch.setattr(worker_runtime, "register_kline_sync_jobs", _fake_register_jobs)
+    monkeypatch.setattr(worker_runtime, "register_company_detail_sync_jobs", _fake_register_jobs)
 
     runtime = await bootstrap_worker(settings=Settings())
 
@@ -94,7 +115,10 @@ async def test_bootstrap_worker_auto_registers_jobs_after_connections_started(mo
     assert events == [
         "connections.start",
         "build_source_registry",
+        "health_check_sources",
         "create_scheduler",
+        "build_service_factory",
+        "register_jobs",
         "build_service_factory",
         "register_jobs",
         "scheduler.start",
@@ -113,7 +137,9 @@ async def test_worker_runtime_stop_shuts_scheduler_and_connections() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_worker_forever_waits_shutdown_and_stops_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_worker_forever_waits_shutdown_and_stops_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[str] = []
     shutdown_event = asyncio.Event()
 

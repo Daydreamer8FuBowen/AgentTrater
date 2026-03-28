@@ -1,15 +1,3 @@
-"""
-TuShare 数据源适配器
-
-提供从 TuShare 获取中国股票市场数据的接口。
-TuShare 是一个提供 A 股、港股、期货等多市场数据的数据库。
-
-支持的数据类型：
-- K线数据（日线、周线、月线等）
-- 财报数据
-- 行业信息
-- 股票基本信息
-"""
 from __future__ import annotations
 
 import asyncio
@@ -19,94 +7,260 @@ from typing import Any
 
 import tushare as ts
 
+from agent_trader.core.time import ensure_utc, market_time_to_utc, to_market_time
 from agent_trader.domain.models import BarInterval, ExchangeKind
 from agent_trader.ingestion.models import (
     BasicInfoFetchResult,
     BasicInfoRecord,
+    CompanyFinancialIndicatorFetchResult,
+    CompanyFinancialIndicatorRecord,
+    CompanyIncomeStatementFetchResult,
+    CompanyIncomeStatementRecord,
+    CompanyValuationFetchResult,
+    CompanyValuationRecord,
     DataCapability,
     DataRouteKey,
-    FinancialReportFetchResult,
-    FinancialReportRecord,
-    FinancialReportQuery,
     KlineFetchResult,
-    KlineRecord,
     KlineQuery,
-    NewsFetchResult,
-    NewsRecord,
-    NewsQuery,
+    KlineRecord,
     SourceCapabilitySpec,
 )
+from agent_trader.ingestion.sources.utils import (
+    infer_market_from_symbol,
+    normalize_a_share_symbol,
+    normalize_utc_minute,
+    to_a_share_daily_bar_start_utc,
+)
 
+# 模块级日志器：统一记录 TuShare source 的调用异常与诊断信息。
 logger = logging.getLogger(__name__)
 
-# BarInterval → TuShare 频率标识映射（本适配器仅支持 5min 和 日线）
+# 统一周期到 TuShare freq 参数的映射表。
 _INTERVAL_TO_FREQ: dict[BarInterval, str] = {
-    BarInterval.M5: "5min",
     BarInterval.D1: "D",
 }
-
-# TuShare 支持的新闻源（news API 的 src 参数）
-_NEWS_SRCS = ("sina", "wallstreetcn", "10jqka", "eastmoney", "yuncaijing", "guba_eastmoney", "rss")
-
-# 此数据源的能力声明
+# 该 source 对外声明的可用 K 线周期集合。
 _SUPPORTED_KLINE_INTERVALS = tuple(_INTERVAL_TO_FREQ.keys())
+# 该 source 当前支持的市场范围（A 股沪深）。
 _A_SHARE_MARKETS = (ExchangeKind.SSE, ExchangeKind.SZSE)
+# TuShare 中按“日期粒度”查询时使用的 freq 集合。
+_DAYLIKE_FREQS = {"D", "W", "M"}
+_COMPANY_DETAIL_LOOKBACK_YEARS = 5
+
+
+class TuShareCompanyDetailAbility:
+    def __init__(self, pro: Any, source_name: str) -> None:
+        self._pro = pro
+        self._source_name = source_name
+
+    async def fetch_company_valuation_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyValuationFetchResult:
+        canonical_symbol = normalize_a_share_symbol(symbol, market)
+        valuation = await self._fetch_stock_valuation(canonical_symbol, market)
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+        payload = [valuation] if valuation is not None else []
+        return CompanyValuationFetchResult(
+            source=self._source_name,
+            route_key=route_key,
+            payload=payload,
+            metadata={"symbol": canonical_symbol, "count": len(payload)},
+        )
+
+    async def fetch_company_financial_indicators_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyFinancialIndicatorFetchResult:
+        canonical_symbol = normalize_a_share_symbol(symbol, market)
+        start_date, end_date = _build_recent_years_date_window(_COMPANY_DETAIL_LOOKBACK_YEARS)
+        financial_indicators = await self._fetch_financial_indicators(
+            canonical_symbol,
+            market,
+            start_date,
+            end_date,
+        )
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+        return CompanyFinancialIndicatorFetchResult(
+            source=self._source_name,
+            route_key=route_key,
+            payload=financial_indicators,
+            metadata={
+                "symbol": canonical_symbol,
+                "start_date": start_date,
+                "end_date": end_date,
+                "count": len(financial_indicators),
+            },
+        )
+
+    async def fetch_company_income_statements_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyIncomeStatementFetchResult:
+        canonical_symbol = normalize_a_share_symbol(symbol, market)
+        start_date, end_date = _build_recent_years_date_window(_COMPANY_DETAIL_LOOKBACK_YEARS)
+        income_statements = await self._fetch_income_statements(
+            canonical_symbol,
+            market,
+            start_date,
+            end_date,
+        )
+        route_key = DataRouteKey(
+            capability=DataCapability.COMPANY_DETAIL,
+            market=market,
+            interval=None,
+        )
+        return CompanyIncomeStatementFetchResult(
+            source=self._source_name,
+            route_key=route_key,
+            payload=income_statements,
+            metadata={
+                "symbol": canonical_symbol,
+                "start_date": start_date,
+                "end_date": end_date,
+                "count": len(income_statements),
+            },
+        )
+
+    async def _fetch_stock_valuation(
+        self,
+        symbol: str,
+        market: ExchangeKind | None,
+    ) -> CompanyValuationRecord | None:
+        try:
+            df = await asyncio.to_thread(
+                self._pro.daily_basic,
+                ts_code=symbol,
+                trade_date="",
+                fields="ts_code,trade_date,pe,pe_ttm,pb",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TuShare daily_basic failed symbol=%s error=%s", symbol, exc)
+            return None
+        if df is None or df.empty:
+            return None
+        rows = [row.to_dict() for _, row in df.iterrows()]
+        sorted_rows = sorted(
+            rows,
+            key=lambda item: _to_date_sort_key(item.get("trade_date")),
+            reverse=True,
+        )
+        latest = sorted_rows[0]
+        return CompanyValuationRecord(
+            trade_date=_parse_compact_date(latest.get("trade_date"), market),
+            pe_ttm=_to_float(latest.get("pe_ttm")),
+            pe=_to_float(latest.get("pe")),
+            pb=_to_float(latest.get("pb")),
+        )
+
+    async def _fetch_financial_indicators(
+        self,
+        symbol: str,
+        market: ExchangeKind | None,
+        start_date: str,
+        end_date: str,
+    ) -> list[CompanyFinancialIndicatorRecord]:
+        try:
+            df = await asyncio.to_thread(
+                self._pro.fina_indicator,
+                ts_code=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                fields="ts_code,end_date,grossprofit_margin,netprofit_margin,roe,debt_to_assets",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TuShare fina_indicator failed symbol=%s error=%s", symbol, exc)
+            return []
+        if df is None or df.empty:
+            return []
+        rows = [row.to_dict() for _, row in df.iterrows()]
+        sorted_rows = sorted(rows, key=lambda item: _to_date_sort_key(item.get("end_date")))
+        return [
+            CompanyFinancialIndicatorRecord(
+                report_date=_parse_compact_date(item.get("end_date"), market),
+                grossprofit_margin=_to_float(item.get("grossprofit_margin")),
+                netprofit_margin=_to_float(item.get("netprofit_margin")),
+                roe=_to_float(item.get("roe")),
+                debt_to_assets=_to_float(item.get("debt_to_assets")),
+            )
+            for item in sorted_rows
+        ]
+
+    async def _fetch_income_statements(
+        self,
+        symbol: str,
+        market: ExchangeKind | None,
+        start_date: str,
+        end_date: str,
+    ) -> list[CompanyIncomeStatementRecord]:
+        try:
+            df = await asyncio.to_thread(
+                self._pro.income,
+                ts_code=symbol,
+                start_date=start_date,
+                end_date=end_date,
+                fields="ts_code,end_date,report_type,total_revenue,n_income",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("TuShare income failed symbol=%s error=%s", symbol, exc)
+            return []
+        if df is None or df.empty:
+            return []
+        rows = [row.to_dict() for _, row in df.iterrows()]
+        sorted_rows = sorted(rows, key=lambda item: _to_date_sort_key(item.get("end_date")))
+        return [
+            CompanyIncomeStatementRecord(
+                report_date=_parse_compact_date(item.get("end_date"), market),
+                report_type=_to_optional_str(item.get("report_type")),
+                revenue=_to_float(item.get("total_revenue")),
+                net_profit=_to_float(item.get("n_income")),
+            )
+            for item in sorted_rows
+        ]
 
 
 class TuShareSource:
+    """TuShare 统一数据源适配器。
+
+    架构说明：
+    - 本类是 sources 层 provider 实现，遵循统一 K 线能力契约。
+    - 在路由架构中与 BaoStock 并列，网关根据 route_key 与优先级选择实际 provider。
+    - 本类内部完成 token 连接配置、symbol/time 字段规范化与统一结果封装，
+      保障上层调用不依赖 TuShare 原生字段结构。
     """
-    TuShare 数据源适配器，负责从 TuShare API 获取原始股票数据。
 
-    Attributes:
-        token (str): TuShare API token，用于认证请求
-        pro (tushare.TushareAPI): TuShare Pro API 客户端实例
-        http_url (str): TuShare 数据源 URL（通常是国内加速节点）
-    """
-
-    def __init__(self, token: str, http_url: str = "http://lianghua.nanyangqiankun.top"):
-        """
-        初始化 TuShare 数据源。
-
-        Args:
-            token: TuShare API token（从 https://tushare.pro 获取）
-            http_url: TuShare HTTP 数据源 URL，默认为国内加速节点
-        """
+    def __init__(self, token: str, http_url: str | None = None) -> None:
         if not token:
             raise ValueError("TuShare token 不能为空，请在环境变量或配置中设置 TUSHARE_TOKEN")
-
         self.token = token
-        self.http_url = http_url
-        self.pro = ts.pro_api(token)
-        # 关键配置：确保 token 和 HTTP URL 正确设置
-        # 这两行代码保证能正常获取数据（特别是通过国内代理的情况）
-        self.pro._DataApi__token = token
-        self.pro._DataApi__http_url = http_url
+        self.http_url = (http_url or "").strip()
+        if self.http_url:
+            self.pro = ts.pro_api(token)
+            self.pro._DataApi__token = token
+            self.pro._DataApi__http_url = self.http_url
+        else:
+            ts.set_token(token)
+            self.pro = ts.pro_api()
         self.name = "tushare"
+        self.company_detail_ability = TuShareCompanyDetailAbility(self.pro, self.name)
 
     @classmethod
     def from_settings(cls, settings: Any) -> TuShareSource:
-        """
-        从统一配置系统创建 TuShareSource 实例。
-
-        Args:
-            settings: 从 get_settings() 获取的 Settings 实例
-
-        Returns:
-            TuShareSource 实例
-
-        Raises:
-            ValueError: 如果配置中没有提供有效的 token
-        """
-        tushare_config = settings.tushare
-        return cls(token=tushare_config.token, http_url=tushare_config.http_url)
-
-    # ------------------------------------------------------------------
-    # 统一数据能力接口（KlineDataSource / NewsDataSource 协议实现）
-    # 约定：basic_info 与 kline 绑定出现，不单独拆分协议。
-    # ------------------------------------------------------------------
+        config = settings.tushare
+        return cls(token=config.token, http_url=config.http_url)
 
     def capabilities(self) -> list[SourceCapabilitySpec]:
-        """声明此数据源支持的能力范围，供 DataSourceRegistry 查询。"""
         return [
             SourceCapabilitySpec(
                 source=self.name,
@@ -116,259 +270,119 @@ class TuShareSource:
             ),
             SourceCapabilitySpec(
                 source=self.name,
-                capability=DataCapability.NEWS,
-                markets=(),  # 新闻不区分市场
-            ),
-            SourceCapabilitySpec(
-                source=self.name,
-                capability=DataCapability.FINANCIAL_REPORT,
+                capability=DataCapability.COMPANY_DETAIL,
                 markets=_A_SHARE_MARKETS,
             ),
         ]
 
     async def fetch_klines_unified(self, query: KlineQuery) -> KlineFetchResult:
-        """实现 KlineDataSource 协议。
-
-        通过 ``ts.pro_bar`` 获取各周期 K 线，支持前复权/后复权。
-
-        Args:
-            query: K 线查询参数，包含 symbol、时间范围、周期、复权标志等。
-
-        Returns:
-            KlineFetchResult，payload 中每条记录均为统一字段的 K 线结构。
-
-        Raises:
-            ValueError: 不支持的 BarInterval（如 M3、H4）。
-            Exception: TuShare API 调用失败时向上传播，由 Gateway/选择器处理熔断。
-        """
+        """获取 K 线并保证 payload 按 bar_time 递增（从旧到新）排序。"""
         freq = _INTERVAL_TO_FREQ.get(query.interval)
         if freq is None:
-            raise ValueError(
-                f"TuShare 不支持 BarInterval={query.interval.value}，"
-                f"支持范围：{list(_INTERVAL_TO_FREQ.keys())}"
-            )
-
-        adj: str | None = "qfq" if query.adjusted else None
-        # 日线以上用 YYYYMMDD；分钟线也接受 YYYYMMDD（TuShare 内部会处理）
-        start_str = query.start_time.strftime("%Y%m%d")
-        end_str = query.end_time.strftime("%Y%m%d")
-
+            raise ValueError(f"TuShare 不支持 BarInterval={query.interval.value}")
+        start_utc = normalize_utc_minute(query.start_time, field_name="start_time")
+        end_utc = normalize_utc_minute(query.end_time, field_name="end_time")
+        if end_utc < start_utc:
+            raise ValueError("end_time 不能早于 start_time")
+        canonical_symbol = normalize_a_share_symbol(query.symbol, query.market)
+        start_str = _format_kline_query_time(start_utc, query.market, freq)
+        end_str = _format_kline_query_time(end_utc, query.market, freq)
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
             market=query.market,
             interval=query.interval,
         )
-
         df = await asyncio.to_thread(
             ts.pro_bar,
-            ts_code=query.symbol,
-            adj=adj,
+            ts_code=canonical_symbol,
+            adj="qfq" if query.adjusted else None,
             start_date=start_str,
             end_date=end_str,
             freq=freq,
             api=self.pro,
         )
-
         if df is None or df.empty:
-            logger.warning(
-                "fetch_klines_unified: no data symbol=%s freq=%s [%s, %s]",
-                query.symbol, freq, start_str, end_str,
-            )
             return KlineFetchResult(
                 source=self.name,
                 route_key=route_key,
                 payload=[],
-                metadata={"symbol": query.symbol, "freq": freq, "count": 0},
+                metadata={"symbol": canonical_symbol, "freq": freq, "count": 0},
             )
-
-        payload: list[KlineRecord] = []
-        for _, row in df.iterrows():
-            payload.append(_normalize_tushare_kline_record(row.to_dict(), query.interval, query.adjusted))
-
-        logger.info(
-            "fetch_klines_unified: fetched %d bars symbol=%s freq=%s",
-            len(payload), query.symbol, freq,
-        )
+        payload = [
+            _normalize_tushare_kline_record(row.to_dict(), query.interval, query.adjusted)
+            for _, row in df.iterrows()
+        ]
+        payload = [item for item in payload if start_utc <= ensure_utc(item.bar_time) <= end_utc]
+        payload = sorted(payload, key=lambda item: ensure_utc(item.bar_time))
         return KlineFetchResult(
             source=self.name,
             route_key=route_key,
             payload=payload,
-            metadata={"symbol": query.symbol, "freq": freq, "count": len(payload)},
-        )
-
-    async def fetch_news_unified(self, query: NewsQuery) -> NewsFetchResult:
-        """实现 NewsDataSource 协议。
-
-        通过 TuShare ``news`` 接口按时间段拉取新闻，支持：
-        - 多新闻源（通过 ``query.extra["src"]`` 指定，默认 ``"sina"``）
-        - 关键词过滤（在 title + content 中做 OR 匹配，不区分大小写）
-        - 股票代码过滤（对 ``channels`` 字段做包含匹配）
-
-        出于权限成本考虑，默认只查询单个 src；如需多源聚合，可在
-        ``query.extra["src"]`` 中传入逗号分隔的字符串，例如
-        ``"sina,eastmoney"``，本方法会并发获取并合并去重。
-
-        Args:
-            query: 新闻查询参数。
-
-        Returns:
-            NewsFetchResult，payload 中每条记录均为统一字段的新闻结构。
-
-        Raises:
-            Exception: TuShare API 调用失败时向上传播。
-        """
-        route_key = DataRouteKey(
-            capability=DataCapability.NEWS,
-            market=query.market,
-        )
-
-        # 解析新闻数据源（可在 extra 中覆盖，逗号分隔支持多源）
-        raw_src: str = query.extra.get("src", "sina")
-        sources = [s.strip() for s in raw_src.split(",") if s.strip() in _NEWS_SRCS]
-        if not sources:
-            logger.warning("fetch_news_unified: unknown src=%s, fallback to sina", raw_src)
-            sources = ["sina"]
-
-        # 构建时间参数（TuShare 要求 "YYYYMMDD HH:MM:SS" 格式）
-        start_str = (
-            query.start_time.strftime("%Y%m%d %H:%M:%S") if query.start_time else None
-        )
-        end_str = (
-            query.end_time.strftime("%Y%m%d %H:%M:%S") if query.end_time else None
-        )
-
-        async def _fetch_one_src(src: str) -> list[dict[str, Any]]:
-            kwargs: dict[str, Any] = {"src": src}
-            if start_str:
-                kwargs["start_date"] = start_str
-            if end_str:
-                kwargs["end_date"] = end_str
-            df = await asyncio.to_thread(self.pro.news, **kwargs)
-            if df is None or df.empty:
-                return []
-            return [row.to_dict() for _, row in df.iterrows()]
-
-        # 并发拉取多个新闻源
-        results: list[list[dict[str, Any]]] = await asyncio.gather(
-            *[_fetch_one_src(src) for src in sources]
-        )
-
-        # 合并、去重（以 datetime+title 为唯一键）
-        seen: set[tuple[str, str]] = set()
-        merged: list[dict[str, Any]] = []
-        for records in results:
-            for rec in records:
-                key = (str(rec.get("datetime", "")), str(rec.get("title", "")))
-                if key in seen:
-                    continue
-                seen.add(key)
-                merged.append(rec)
-
-        # 关键词过滤（OR 语义，不区分大小写）
-        if query.keywords:
-            kws = [kw.lower() for kw in query.keywords]
-            merged = [
-                rec for rec in merged
-                if any(
-                    kw in (rec.get("title", "") + " " + rec.get("content", "")).lower()
-                    for kw in kws
-                )
-            ]
-
-        # 股票代码过滤（模糊匹配 channels 字段）
-        if query.symbol:
-            sym = query.symbol
-            merged = [
-                rec for rec in merged
-                if sym in str(rec.get("channels", ""))
-            ]
-
-        logger.info(
-            "fetch_news_unified: fetched %d records src=%s keywords=%s symbol=%s",
-            len(merged), sources, query.keywords, query.symbol,
-        )
-        return NewsFetchResult(
-            source=self.name,
-            route_key=route_key,
-            payload=[_normalize_tushare_news_record(record) for record in merged],
-            metadata={
-                "sources": sources,
-                "count": len(merged),
-                "keywords": query.keywords,
-                "symbol": query.symbol,
-            },
+            metadata={"symbol": canonical_symbol, "freq": freq, "count": len(payload)},
         )
 
     async def fetch_basic_info(self, market: ExchangeKind | None = None) -> BasicInfoFetchResult:
-        """异步获取股票基本信息，返回统一结果容器。"""
         route_key = DataRouteKey(
             capability=DataCapability.KLINE,
             market=market,
         )
-
         try:
-            df = await asyncio.to_thread(self.pro.stock_basic, exchange="", list_status="L")
-
-            if df is None or df.empty:
-                logger.warning("No stock basic info found")
-                return BasicInfoFetchResult(
-                    source=self.name,
-                    route_key=route_key,
-                    payload=[],
-                    metadata={"dataset": "stock_basic", "count": 0},
-                )
-
-            payload = [_normalize_tushare_basic_info_record(row.to_dict()) for _, row in df.iterrows()]
-            logger.info("Fetched %d stock basic infos", len(payload))
-            return BasicInfoFetchResult(
-                source=self.name,
-                route_key=route_key,
-                payload=payload,
-                metadata={"dataset": "stock_basic", "count": len(payload)},
+            df = await asyncio.to_thread(
+                self.pro.stock_basic,
+                exchange="",
+                list_status="L",
+                fields="ts_code,name,industry,area,list_date,list_status",
             )
-
-        except Exception as e:
-            logger.error(f"Error fetching stock basic info: {e}")
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Error fetching TuShare basic info: %s", exc)
             return BasicInfoFetchResult(
                 source=self.name,
                 route_key=route_key,
                 payload=[],
-                metadata={"dataset": "stock_basic", "count": 0, "error": str(e)},
+                metadata={"dataset": "stock_basic", "count": 0, "error": str(exc)},
             )
-
-    async def fetch_financial_reports_unified(
-        self,
-        query: FinancialReportQuery,
-    ) -> FinancialReportFetchResult:
-        """通过 TuShare ``fina_indicator`` 获取统一格式财务数据。"""
-        route_key = DataRouteKey(
-            capability=DataCapability.FINANCIAL_REPORT,
-            market=query.market,
-        )
-
-        params: dict[str, Any] = {"ts_code": query.symbol}
-        if query.start_time:
-            params["start_date"] = query.start_time.strftime("%Y%m%d")
-        if query.end_time:
-            params["end_date"] = query.end_time.strftime("%Y%m%d")
-        params.update(query.extra)
-
-        df = await asyncio.to_thread(self.pro.fina_indicator, **params)
         if df is None or df.empty:
-            return FinancialReportFetchResult(
+            return BasicInfoFetchResult(
                 source=self.name,
                 route_key=route_key,
                 payload=[],
-                metadata={"symbol": query.symbol, "count": 0},
+                metadata={"dataset": "stock_basic", "count": 0},
             )
-
-        payload = [_normalize_tushare_financial_record(row.to_dict()) for _, row in df.iterrows()]
-        return FinancialReportFetchResult(
+        
+        raw_items = [
+            _normalize_tushare_basic_info_record(row.to_dict()) for _, row in df.iterrows()
+        ]
+        payload = [item for item in raw_items if item is not None]
+        if market in {ExchangeKind.SSE, ExchangeKind.SZSE}:
+            suffix = "SH" if market == ExchangeKind.SSE else "SZ"
+            payload = [item for item in payload if item.symbol.endswith(f".{suffix}")]
+        return BasicInfoFetchResult(
             source=self.name,
             route_key=route_key,
             payload=payload,
-            metadata={"symbol": query.symbol, "count": len(payload)},
+            metadata={"dataset": "stock_basic", "count": len(payload)},
         )
+
+    async def fetch_company_valuation_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyValuationFetchResult:
+        return await self.company_detail_ability.fetch_company_valuation_unified(symbol, market)
+
+    async def fetch_company_financial_indicators_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyFinancialIndicatorFetchResult:
+        return await self.company_detail_ability.fetch_company_financial_indicators_unified(symbol, market)
+
+    async def fetch_company_income_statements_unified(
+        self,
+        symbol: str,
+        market: ExchangeKind | None = None,
+    ) -> CompanyIncomeStatementFetchResult:
+        return await self.company_detail_ability.fetch_company_income_statements_unified(symbol, market)
 
 
 def _normalize_tushare_kline_record(
@@ -376,10 +390,10 @@ def _normalize_tushare_kline_record(
     interval: BarInterval,
     adjusted: bool,
 ) -> KlineRecord:
-    bar_time = _parse_tushare_bar_time(record)
+    symbol = normalize_a_share_symbol(str(record.get("ts_code", "")))
     return KlineRecord(
-        symbol=str(record.get("ts_code", "")),
-        bar_time=bar_time,
+        symbol=symbol,
+        bar_time=_parse_tushare_bar_time(record, interval),
         interval=interval.value,
         open=_to_float(record.get("open")),
         high=_to_float(record.get("high")),
@@ -393,124 +407,86 @@ def _normalize_tushare_kline_record(
     )
 
 
-def _normalize_tushare_news_record(record: dict[str, Any]) -> NewsRecord:
-    channels = str(record.get("channels", "")).strip()
-    return NewsRecord(
-        published_at=_parse_datetime_value(record.get("datetime")),
-        title=str(record.get("title", "")),
-        content=str(record.get("content", "")),
-        source_channel=str(record.get("src", "")),
-        url=record.get("url"),
-        symbols=_extract_symbols_from_channels(channels),
-    )
-
-
-def _normalize_tushare_basic_info_record(record: dict[str, Any]) -> BasicInfoRecord:
-    return BasicInfoRecord(
-        symbol=str(record.get("ts_code", "")),
-        name=record.get("name"),
-        industry=record.get("industry"),
-        area=record.get("area"),
-        market=record.get("market"),
-        list_date=_parse_compact_date(record.get("list_date")),
-        status=record.get("list_status"),
-    )
-
-
-def _normalize_tushare_financial_record(record: dict[str, Any]) -> FinancialReportRecord:
-    return FinancialReportRecord(
-        symbol=str(record.get("ts_code", "")),
-        report_type=str(record.get("end_type", "fina_indicator") or "fina_indicator"),
-        report_date=_parse_compact_date(record.get("end_date")),
-        published_at=_parse_compact_date(record.get("ann_date")),
-        report_year=_extract_year(record.get("end_date")),
-        report_quarter=_extract_quarter(record.get("end_date")),
-        metrics={
-            "eps": _to_float(record.get("eps")),
-            "dt_eps": _to_float(record.get("dt_eps")),
-            "total_revenue_ps": _to_float(record.get("total_revenue_ps")),
-            "netprofit_margin": _to_float(record.get("netprofit_margin")),
-            "roe": _to_float(record.get("roe")),
-            "roa": _to_float(record.get("roa")),
-            "debt_to_assets": _to_float(record.get("debt_to_assets")),
-        },
-    )
-
-
-def _extract_year(value: Any) -> int | None:
-    text = str(value or "").strip()
-    if len(text) >= 4 and text[:4].isdigit():
-        return int(text[:4])
-    return None
-
-
-def _extract_quarter(value: Any) -> int | None:
-    text = str(value or "").strip()
-    if len(text) != 8 or not text.isdigit():
+def _normalize_tushare_basic_info_record(record: dict[str, Any]) -> BasicInfoRecord | None:
+    try:
+        symbol = normalize_a_share_symbol(str(record.get("ts_code", "")))
+        if not symbol:
+            return None
+        market = infer_market_from_symbol(symbol)
+        return BasicInfoRecord(
+            symbol=symbol,
+            name=record.get("name"),
+            industry=record.get("industry"),
+            area=record.get("area"),
+            market=market,
+            list_date=_parse_compact_date(record.get("list_date"), market),
+            status="1" if record.get("list_status") == "L" else "0",
+            act_ent_type=record.get("act_ent_type"),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Skip malformed TuShare stock_basic record: %s ; error=%s", record, exc)
         return None
-    month = int(text[4:6])
-    if month <= 3:
-        return 1
-    if month <= 6:
-        return 2
-    if month <= 9:
-        return 3
-    return 4
 
 
-def _parse_tushare_bar_time(record: dict[str, Any]) -> datetime:
+def _parse_tushare_bar_time(record: dict[str, Any], interval: BarInterval) -> datetime:
+    symbol = normalize_a_share_symbol(str(record.get("ts_code", "")))
+    market = infer_market_from_symbol(symbol)
     trade_time = record.get("trade_time")
     if trade_time not in (None, ""):
-        return datetime.strptime(str(trade_time), "%Y-%m-%d %H:%M:%S")
+        parsed = datetime.strptime(str(trade_time), "%Y-%m-%d %H:%M:%S")
+        return market_time_to_utc(parsed, market)
 
     trade_date = record.get("trade_date")
     if trade_date in (None, ""):
         raise ValueError("TuShare K 线记录缺少 trade_time/trade_date")
-    return datetime.strptime(str(trade_date), "%Y%m%d")
+    parsed = datetime.strptime(str(trade_date), "%Y%m%d")
+    if interval == BarInterval.D1:
+        return to_a_share_daily_bar_start_utc(parsed, market)
+    return market_time_to_utc(parsed, market)
 
 
-def _parse_compact_date(value: Any) -> datetime | None:
+def _format_kline_query_time(dt: datetime, market: ExchangeKind | None, freq: str) -> str:
+    local = to_market_time(dt, market)
+    if freq in _DAYLIKE_FREQS:
+        return local.strftime("%Y%m%d")
+    return local.strftime("%Y%m%d %H:%M:%S")
+
+
+def _parse_compact_date(value: Any, market: ExchangeKind | None) -> datetime | None:
     if value in (None, ""):
         return None
-
     text = str(value).strip()
     if not text:
         return None
     if len(text) == 8 and text.isdigit():
-        return datetime.strptime(text, "%Y%m%d")
-    return datetime.strptime(text, "%Y-%m-%d")
-
-
-def _parse_datetime_value(value: Any) -> datetime | None:
-    if value in (None, ""):
-        return None
-
-    text = str(value).strip()
-    if not text:
-        return None
-    if len(text) == 14 and text.isdigit():
-        return datetime.strptime(text, "%Y%m%d%H%M%S")
-    if len(text) == 19:
-        return datetime.strptime(text, "%Y-%m-%d %H:%M:%S")
-    if len(text) == 17:
-        return datetime.strptime(text, "%Y%m%d %H:%M:%S")
-    return datetime.fromisoformat(text)
-
-
-def _extract_symbols_from_channels(channels: str) -> list[str]:
-    items = []
-    for raw_item in channels.split(","):
-        item = raw_item.strip()
-        if not item or "." not in item:
-            continue
-        code, suffix = item.split(".", maxsplit=1)
-        upper_suffix = suffix.upper()
-        if upper_suffix in {"SZ", "SH"} and code.isdigit():
-            items.append(f"{code}.{upper_suffix}")
-    return items
+        return market_time_to_utc(datetime.strptime(text, "%Y%m%d"), market)
+    return market_time_to_utc(datetime.strptime(text, "%Y-%m-%d"), market)
 
 
 def _to_float(value: Any) -> float | None:
     if value in (None, ""):
         return None
     return float(value)
+
+
+def _build_recent_years_date_window(years: int) -> tuple[str, str]:
+    now = datetime.now()
+    start_year = now.year - years
+    try:
+        start = datetime(start_year, now.month, now.day)
+    except ValueError:
+        start = datetime(start_year, now.month, 28)
+    return start.strftime("%Y%m%d"), now.strftime("%Y%m%d")
+
+
+def _to_date_sort_key(value: Any) -> str:
+    if value in (None, ""):
+        return ""
+    return str(value).strip()
+
+
+def _to_optional_str(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    return text or None

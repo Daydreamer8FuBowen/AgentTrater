@@ -1,6 +1,6 @@
 # 数据源路由设计
 
-本文档描述 AgentTrader 当前多数据源路由机制：
+本文档描述 AgentTrader 当前 `ingestion/sources` 的多数据源路由机制（K 线域）：
 
 - 数据源按能力声明支持范围。
 - 路由优先级存于 Mongo。
@@ -19,17 +19,18 @@
   - 失败源降级到队尾并持久化。
 
 - `DataAccessGateway`
-  - 对外提供统一方法：
+  - sources 侧统一入口聚焦：
     - `fetch_klines`
-    - `fetch_news`
-    - `fetch_financial_reports`
     - `fetch_basic_info`
+    - `fetch_company_valuation_unified`
+    - `fetch_company_financial_indicators_unified`
+    - `fetch_company_income_statements_unified`
 
 ## 路由键
 
 `DataRouteKey` 由三元组组成：
 
-- `capability`: `kline` / `news` / `financial_report`
+- `capability`: 当前 sources 设计包含 `kline` 与 `company_detail`
 - `market`: 市场维度（可空）
 - `interval`: 周期维度（仅 K 线有意义，可空）
 
@@ -37,7 +38,7 @@
 
 - `capability:market:interval`
 - 例如：`kline:szse:1d`
-- 通配为 `*`，例如：`news:*:*`
+- 通配为 `*`，例如：`kline:*:*`
 
 ## 优先级存储
 
@@ -75,5 +76,6 @@ Mongo 集合：`source_priority_routes`
 ## 与能力契约关系
 
 - `basic_info` 归属于 K 线能力，不是独立 capability。
+- `NewsDataSource`、`FinancialReportDataSource` 不再作为 source 契约或能力声明的一部分。
 - 统一字段规范见 `UNIFIED_SOURCE_PAYLOAD_SPEC.md`。
 - provider 协议定义见 `SOURCE_CAPABILITY_CONTRACTS.md`。

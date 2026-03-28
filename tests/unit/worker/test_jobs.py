@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-
 import pytest
 
 from agent_trader.core.config import Settings
@@ -18,69 +16,59 @@ class _FakeScheduler:
 
 class _FakeService:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[str] = []
 
-    async def sync_realtime_m5_positions(self, market: str) -> None:
-        self.calls.append(("realtime_positions", market))
-
-    async def sync_realtime_m5_candidates(self, market: str) -> None:
-        self.calls.append(("realtime_candidates", market))
+    async def sync_market(self, market: str) -> None:
+        self.calls.append(market)
 
     async def sync_backfill_d1_all(self, market: str) -> None:
-        self.calls.append(("backfill_d1", market))
+        self.calls.append(f"{market}:d1")
 
     async def sync_backfill_m5_positions_candidates(self, market: str) -> None:
-        self.calls.append(("backfill_m5", market))
+        self.calls.append(f"{market}:m5")
 
 
-def test_register_kline_sync_jobs_uses_interval_backfill_schedule() -> None:
+def test_register_kline_sync_jobs_registers_startup_and_daily_history_jobs_per_market() -> None:
     scheduler = _FakeScheduler()
+    settings = Settings(
+        SYNC_ENABLED_MARKETS="sse,szse",
+        SYNC_REALTIME_M5_INTERVAL_SECONDS=30,
+    )
 
     jobs.register_kline_sync_jobs(
         scheduler,
         service_factory=lambda: _FakeService(),
-        settings=Settings(sync_enabled_markets="sse"),
+        settings=settings,
     )
 
-    backfill_calls = [
-        call
-        for call in scheduler.calls
-        if str(call["kwargs"].get("id", "")).startswith("backfill_")
-    ]
+    assert len(scheduler.calls) == 4
+    registered = {str(call["kwargs"]["id"]): call for call in scheduler.calls}
 
-    assert len(backfill_calls) == 2
-    assert all(call["trigger"] == "interval" for call in backfill_calls)
-    assert all(call["kwargs"].get("minutes") == jobs._BACKFILL_CHECK_INTERVAL_MINUTES for call in backfill_calls)
+    for market in ("sse", "szse"):
+        startup_entry = registered[f"kline_history_update_startup_{market}"]
+        assert startup_entry["func"] is jobs._run_market_history_update
+        assert startup_entry["trigger"] == "date"
+        assert startup_entry["kwargs"]["run_date"] is not None
+        assert startup_entry["kwargs"]["kwargs"]["market"] == market
+        assert startup_entry["kwargs"]["replace_existing"] is True
+        assert startup_entry["kwargs"]["coalesce"] is True
+        assert startup_entry["kwargs"]["max_instances"] == 1
 
-
-def test_is_market_trading_time_for_a_share_sessions() -> None:
-    # Monday 10:00 in trading session
-    assert jobs._is_market_trading_time("sse", datetime(2026, 3, 23, 10, 0, 0)) is True
-    # Monday 12:00 lunch break
-    assert jobs._is_market_trading_time("sse", datetime(2026, 3, 23, 12, 0, 0)) is False
-    # Saturday should be closed
-    assert jobs._is_market_trading_time("sse", datetime(2026, 3, 21, 10, 0, 0)) is False
-
-
-@pytest.mark.asyncio
-async def test_realtime_job_skips_outside_trading_time(monkeypatch: pytest.MonkeyPatch) -> None:
-    service = _FakeService()
-
-    monkeypatch.setattr(jobs, "_should_run_realtime", lambda market: False)
-
-    await jobs._run_realtime_positions(service_factory=lambda: service, market="sse")
-    await jobs._run_realtime_candidates(service_factory=lambda: service, market="sse")
-
-    assert service.calls == []
+        daily_entry = registered[f"kline_history_update_daily_{market}"]
+        assert daily_entry["func"] is jobs._run_market_history_update
+        assert daily_entry["trigger"] == "cron"
+        assert daily_entry["kwargs"]["hour"] == 23
+        assert daily_entry["kwargs"]["minute"] == 0
+        assert daily_entry["kwargs"]["kwargs"]["market"] == market
+        assert daily_entry["kwargs"]["replace_existing"] is True
+        assert daily_entry["kwargs"]["coalesce"] is True
+        assert daily_entry["kwargs"]["max_instances"] == 1
 
 
 @pytest.mark.asyncio
-async def test_backfill_job_runs_in_non_trading_time(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_run_market_history_update_calls_service() -> None:
     service = _FakeService()
 
-    monkeypatch.setattr(jobs, "_should_run_backfill", lambda market: True)
+    await jobs._run_market_history_update(service_factory=lambda: service, market="sse")
 
-    await jobs._run_backfill_d1(service_factory=lambda: service, market="sse")
-    await jobs._run_backfill_m5(service_factory=lambda: service, market="sse")
-
-    assert service.calls == [("backfill_d1", "sse"), ("backfill_m5", "sse")]
+    assert service.calls == ["sse:d1", "sse:m5"]

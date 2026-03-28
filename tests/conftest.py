@@ -36,6 +36,15 @@ def override_trigger_uow(in_memory_uow: InMemoryUnitOfWork) -> InMemoryUnitOfWor
     return in_memory_uow
 
 
+def pytest_configure(config: pytest.Config) -> None:
+    """注册自定义pytest标记。"""
+    config.addinivalue_line("markers", "integration: 集成测试标记")
+    config.addinivalue_line("markers", "unit: 单元测试标记")
+    config.addinivalue_line("markers", "agent_integration: agent集成测试标记")
+    config.addinivalue_line("markers", "system_flow: 系统流程测试标记")
+    config.addinivalue_line("markers", "live: 实时/直播测试标记")
+
+
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     for item in items:
         path = Path(str(item.fspath)).as_posix()
@@ -43,6 +52,8 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
             item.add_marker(pytest.mark.unit)
         elif "/tests/integration/agent_nodes/" in path:
             item.add_marker(pytest.mark.agent_integration)
+        elif "/tests/integration/" in path and "agent_nodes" not in path:
+            item.add_marker(pytest.mark.integration)
         elif "/tests/system/flows/" in path:
             item.add_marker(pytest.mark.system_flow)
             if "live" in Path(path).name:

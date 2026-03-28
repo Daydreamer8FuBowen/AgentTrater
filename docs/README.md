@@ -1,16 +1,27 @@
-## Docs Index
+# 文档导览
 
-开发入口：
+本目录按“核心文档优先”组织，默认先阅读核心文档，再按专题深入。
+
+## 快速入口
 
 - 后端 API：`uv run uvicorn agent_trader.api.main:app --reload`
 - 后台 worker：`uv run python -m agent_trader.worker`
 - 前端控制台：`cd frontend/admin-console && npm run dev`
 
-- `ARCHITECTURE.md`: 系统数据架构总览（无 Event 设计）。
-- `DB_DESIGN.md`: 当前数据库设计（MongoDB 文档/索引 + InfluxDB 时序结构）。
-- `DATASOURCE.md`: 多数据源动态路由与优先级管理。
-- `SOURCE_CAPABILITY_CONTRACTS.md`: 各数据源能力声明与接口契约。
-- `UNIFIED_SOURCE_PAYLOAD_SPEC.md`: K 线/新闻/财务统一字段规范。
-- `DEVELOPMENT_CONVENTIONS.md`: 开发规范与测试准入规则。
-- `REAL_DATA_SOURCE_TESTING.md`: 真实数据源联调与冒烟策略。
-- `SCHEDULER_DEVELOPMENT.md`: 定时任务开发指南（AsyncIOScheduler 推荐实践）。
+## 核心文档（保留）
+
+- `ARCHITECTURE.md`：系统架构总览与主链路说明
+- `DEVELOPMENT_CONVENTIONS.md`：分层边界、命名、时间与测试规范
+- `DB_DESIGN.md`：Mongo + Influx 当前数据模型与索引语义
+- `DATASOURCE.md`：多数据源路由、优先级与失败降级机制
+- `SOURCE_CAPABILITY_CONTRACTS.md`：数据源能力契约
+- `UNIFIED_SOURCE_PAYLOAD_SPEC.md`：统一 payload 字段规范
+- `SCHEDULER_DEVELOPMENT.md`：worker 调度落地规范
+- `REALTIME_M5_UPDATE_DESIGN.md`：实时 M5 覆盖更新设计
+- `MEASUREMENT_DESIGN.md`：Influx `candles` measurement 设计
+- `TRADINGVIEW_FRONTEND_GUIDE.md`：前端 K 线模块与管理台说明
+- `REAL_DATA_SOURCE_TESTING.md`：真实数据源联调说明
+
+## 测试相关文档
+
+- `../tests/README.md`：测试目录结构与 marker 约定

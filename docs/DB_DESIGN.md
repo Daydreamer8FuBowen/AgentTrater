@@ -269,14 +269,15 @@ MongoUnitOfWork 当前已装配：
 
 必填：
 - open, high, low, close, volume
-- close_ts（close_time 的 epoch 秒）
 
 可选：
 - turnover
 - trade_count
 
 时间戳：
-- point time 使用 Candle.open_time，精度 WritePrecision.S。
+- point time 使用 Candle.open_time，精度 WritePrecision.S（秒）。
+- `Candle.open_time` 必须是 UTC 时间；写入 Influx 时不允许使用市场本地时间。
+- **注**：`Candle.close_time` 不存储在 InfluxDB 中。在应用需要 close_time 时，通过 `get_bar_close_time(open_time, interval)` 推导。
 
 ### 3.4 写入语义
 
